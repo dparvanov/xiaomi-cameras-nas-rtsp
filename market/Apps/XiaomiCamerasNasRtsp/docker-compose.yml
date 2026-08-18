@@ -48,7 +48,7 @@ x-casaos:
   index: /
   port_map: "17883"
   scheme: http
-  icon: icon.svg
+  icon: icon.png
   title:
     en_US: Xiaomi Cameras NAS RTSP Bridge
   tagline:
