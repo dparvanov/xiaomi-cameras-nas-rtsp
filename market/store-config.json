@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "store_id": "xiaomi-cameras-nas-rtsp-store",
+  "name": {
+    "en_US": "Xiaomi Cameras NAS RTSP Market"
+  },
+  "description": {
+    "en_US": "Registry-delivered Xiaomi NAS to Blue Iris bridge for ZimaOS."
+  },
+  "maintainer": "REPLACE_WITH_GITHUB_OWNER",
+  "url": "https://github.com/__GITHUB_REPOSITORY__"
+}

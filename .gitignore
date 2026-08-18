@@ -1,0 +1,8 @@
+.env
+config/config.json
+data/
+logs/
+__pycache__/
+*.pyc
+market/dist/
+market/.cache/

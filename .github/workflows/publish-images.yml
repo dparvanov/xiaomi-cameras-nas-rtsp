@@ -1,0 +1,112 @@
+name: Publish registry images
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+  pages: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: bridge
+            dockerfile: Dockerfile
+            image: ghcr.io/${{ github.repository_owner }}/xiaomi-cameras-nas-rtsp
+          - name: mediamtx
+            dockerfile: Dockerfile.mediamtx
+            image: ghcr.io/${{ github.repository_owner }}/xiaomi-cameras-nas-rtsp-mediamtx
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - name: Build and publish multi-architecture image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          provenance: mode=max
+          sbom: true
+
+  publish-market:
+    name: Build and publish ZimaOS market
+    needs: publish
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+      - name: Resolve release-specific market values
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]
+          namespace=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          find market -type f \( -name '*.json' -o -name '*.yml' -o -name '*.yaml' \) -print0 | \
+            xargs -0 sed -i \
+              -e "s|__GHCR_NAMESPACE__|$namespace|g" \
+              -e "s|__GITHUB_REPOSITORY__|$GITHUB_REPOSITORY|g" \
+              -e "s|__RELEASE_VERSION__|$version|g" \
+              -e "s|REPLACE_WITH_GITHUB_OWNER|$namespace|g"
+          if rg -n '__[A-Z_]+__' market; then
+            echo 'Unresolved release markers remain in market source.' >&2
+            exit 1
+          fi
+      - name: Build AppStore v2 dist
+        uses: IceWhaleTech/build-appstore-action@v1
+        with:
+          source: market
+          output: market/dist
+          base-url: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+          report-json: market/build-report.json
+          report-title: Xiaomi Cameras NAS RTSP ZimaOS Market
+      - name: Verify generated v2 protocol output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s market/dist/store.json
+          test -s market/dist/index.json
+          test -s market/dist/apps/io.github.xiaomi-cameras-nas-rtsp/docker-compose.yml
+          test -s market/dist/apps/io.github.xiaomi-cameras-nas-rtsp/meta.json
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: market/dist
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

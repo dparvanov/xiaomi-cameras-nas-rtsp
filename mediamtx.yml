@@ -1,0 +1,37 @@
+# MediaMTX always listens internally on RTSP/TCP 8554. Compose maps a chosen
+# host RTSP port to it. Passwords are injected as container environment values;
+# never put live passwords in this file.
+logLevel: info
+logDestinations: [stdout]
+
+authMethod: internal
+authInternalUsers:
+  # The bridge container may publish only Xiaomi virtual camera paths.
+  - user: bridge
+    pass: replaced-by-compose
+    ips: []
+    permissions:
+      - action: publish
+        path: "~^xiaomi/.+$"
+      - action: api
+
+rtsp: true
+rtspTransports: [tcp]
+rtspEncryption: "no"
+rtspAddress: :8554
+rtspAuthMethods: [basic]
+
+# This project uses RTSP only. Do not expose any additional media server ports.
+rtmp: false
+hls: false
+webrtc: false
+srt: false
+api: true
+apiAddress: :9997
+metrics: false
+pprof: false
+playback: false
+
+paths:
+  "~^xiaomi/.+$":
+    source: publisher

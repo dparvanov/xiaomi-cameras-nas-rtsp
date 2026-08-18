@@ -1,0 +1,68 @@
+# Registry-only ZimaOS import. Before import, replace every REPLACE_WITH...
+# value with a published GHCR owner, an immutable release version, or a secret.
+name: xiaomi-cameras-nas-rtsp
+
+services:
+  mediamtx:
+    image: ghcr.io/REPLACE_WITH_GHCR_OWNER/xiaomi-cameras-nas-rtsp-mediamtx:REPLACE_WITH_RELEASE_VERSION
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8554:8554/tcp"
+    environment:
+      MTX_AUTHINTERNALUSERS_0_PASS: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
+    security_opt:
+      - no-new-privileges:true
+
+  bridge:
+    image: ghcr.io/REPLACE_WITH_GHCR_OWNER/xiaomi-cameras-nas-rtsp:REPLACE_WITH_RELEASE_VERSION
+    restart: unless-stopped
+    depends_on:
+      mediamtx:
+        condition: service_started
+    environment:
+      BRIDGE_CONFIG: /app/config.default.json
+      RTSP_PUBLISH_PASSWORD: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
+      SETUP_ADMIN_USERNAME: REPLACE_WITH_A_NONDEFAULT_SETUP_USERNAME
+      SETUP_ADMIN_PASSWORD: REPLACE_WITH_A_UNIQUE_SETUP_PASSWORD_AT_LEAST_16_CHARACTERS
+      SETUP_SESSION_SECRET: REPLACE_WITH_A_RANDOM_SESSION_SECRET_AT_LEAST_32_CHARACTERS
+      SETUP_COOKIE_SECURE: "false"
+    volumes:
+      - /DATA/AppData/xiaomi-cameras-nas-rtsp/data:/data
+      - /DATA/AppData/xiaomi-cameras-nas-rtsp/logs:/logs
+      - /DATA/Cameras/xiaomi_camera_videos:/recordings:ro
+    ports:
+      - "0.0.0.0:17883:8080/tcp"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+x-casaos:
+  id: com.ghcr.xiaomi-cameras-nas-rtsp
+  main: bridge
+  index: /
+  port_map: "17883"
+  scheme: http
+  icon: https://raw.githubusercontent.com/REPLACE_WITH_GHCR_OWNER/xiaomi-cameras-nas-rtsp/main/market/Apps/XiaomiCamerasNasRtsp/icon.svg
+  title:
+    en_US: Xiaomi Cameras NAS RTSP Bridge
+  tagline:
+    en_US: Replay Xiaomi NAS clips as Blue Iris RTSP cameras
+  description:
+    en_US: Registry-installed bridge for Xiaomi NAS recordings. Replace all image and credential placeholders before installing.
+  author: Registry deployment
+  developer: Registry deployment
+  category: Home
+  architectures:
+    - amd64
+    - arm64
+  version: "REPLACE_WITH_RELEASE_VERSION"
+  release_notes:
+    en_US: Registry-only Custom App installation.

@@ -1,0 +1,85 @@
+name: xiaomi-cameras-nas-rtsp
+
+services:
+  mediamtx:
+    image: ghcr.io/__GHCR_NAMESPACE__/xiaomi-cameras-nas-rtsp-mediamtx:__RELEASE_VERSION__
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8554:8554/tcp"
+    environment:
+      MTX_AUTHINTERNALUSERS_0_PASS: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
+    security_opt:
+      - no-new-privileges:true
+
+  bridge:
+    image: ghcr.io/__GHCR_NAMESPACE__/xiaomi-cameras-nas-rtsp:__RELEASE_VERSION__
+    restart: unless-stopped
+    depends_on:
+      mediamtx:
+        condition: service_started
+    environment:
+      BRIDGE_CONFIG: /app/config.default.json
+      RTSP_PUBLISH_PASSWORD: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
+      SETUP_ADMIN_USERNAME: REPLACE_WITH_A_NONDEFAULT_SETUP_USERNAME
+      SETUP_ADMIN_PASSWORD: REPLACE_WITH_A_UNIQUE_SETUP_PASSWORD_AT_LEAST_16_CHARACTERS
+      SETUP_SESSION_SECRET: REPLACE_WITH_A_RANDOM_SESSION_SECRET_AT_LEAST_32_CHARACTERS
+      SETUP_COOKIE_SECURE: "false"
+    volumes:
+      - /DATA/AppData/xiaomi-cameras-nas-rtsp/data:/data
+      - /DATA/AppData/xiaomi-cameras-nas-rtsp/logs:/logs
+      - /DATA/Cameras/xiaomi_camera_videos:/recordings:ro
+    ports:
+      - "0.0.0.0:17883:8080/tcp"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+x-casaos:
+  id: io.github.xiaomi-cameras-nas-rtsp
+  main: bridge
+  index: /
+  port_map: "17883"
+  scheme: http
+  icon: icon.svg
+  title:
+    en_US: Xiaomi Cameras NAS RTSP Bridge
+  tagline:
+    en_US: Replay Xiaomi NAS clips as Blue Iris RTSP cameras
+  description:
+    en_US: >-
+      Uses published multi-architecture images and only creates persistent
+      app data under /DATA/AppData. The Xiaomi recordings directory must
+      already exist at /DATA/Cameras/xiaomi_camera_videos.
+  tips:
+    before_install:
+      en_US: >-
+        Replace all credential placeholders with unique values. The bridge and
+        MediaMTX publisher passwords must be identical. The recordings source
+        is mounted read-only and must exist before installation.
+    after_install:
+      en_US: >-
+        Open http://YOUR_NAS_IP:17883, sign in with the setup credentials, and
+        configure the Blue Iris RTSP reader. Use TCP 8554 and /xiaomi/CAMERA_ID
+        in Blue Iris. Blue Iris timestamps replay at re-ingest time.
+  author: REPLACE_WITH_GITHUB_OWNER
+  developer: Xiaomi Cameras NAS RTSP Bridge
+  category: Home
+  architectures:
+    - amd64
+    - arm64
+  version: "__RELEASE_VERSION__"
+  update_at: "2026-08-18"
+  release_notes:
+    en_US: Registry-delivered, no-SSH ZimaOS installation.
+  website: https://github.com/__GITHUB_REPOSITORY__
+  repo: https://github.com/__GITHUB_REPOSITORY__
+  support: https://github.com/__GITHUB_REPOSITORY__/issues
+  docs: https://github.com/__GITHUB_REPOSITORY__/blob/main/README.md

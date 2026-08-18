@@ -1,0 +1,72 @@
+# Import this file into ZimaOS only after running the documented local build:
+# docker build --tag xiaomi-cameras-nas-rtsp:local .
+# Replace every REPLACE_WITH... value in the ZimaOS form/YAML before installing.
+name: xiaomi-cameras-nas-rtsp
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8554:8554/tcp"
+    volumes:
+      - /DATA/AppData/xiaomi-cameras-nas-rtsp/config/mediamtx.yml:/mediamtx.yml:ro
+    environment:
+      MTX_AUTHINTERNALUSERS_0_PASS: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
+    command: ["/mediamtx", "/mediamtx.yml"]
+    security_opt:
+      - no-new-privileges:true
+
+  bridge:
+    image: xiaomi-cameras-nas-rtsp:local
+    restart: unless-stopped
+    depends_on:
+      mediamtx:
+        condition: service_started
+    environment:
+      RTSP_PUBLISH_PASSWORD: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
+      SETUP_ADMIN_USERNAME: REPLACE_WITH_A_NONDEFAULT_SETUP_USERNAME
+      SETUP_ADMIN_PASSWORD: REPLACE_WITH_A_UNIQUE_SETUP_PASSWORD_AT_LEAST_16_CHARACTERS
+      SETUP_SESSION_SECRET: REPLACE_WITH_A_RANDOM_SESSION_SECRET_AT_LEAST_32_CHARACTERS
+      SETUP_COOKIE_SECURE: "false"
+    volumes:
+      - /DATA/AppData/xiaomi-cameras-nas-rtsp/config/config.json:/config/config.json:ro
+      - /DATA/AppData/xiaomi-cameras-nas-rtsp/data:/data
+      - /DATA/AppData/xiaomi-cameras-nas-rtsp/logs:/logs
+      - /DATA/Cameras/xiaomi_camera_videos:/recordings:ro
+    ports:
+      - "0.0.0.0:17883:8080/tcp"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+x-casaos:
+  id: com.local.xiaomi-cameras-nas-rtsp
+  main: bridge
+  index: /
+  port_map: "17883"
+  scheme: http
+  icon: https://raw.githubusercontent.com/REPLACE_WITH_GITHUB_OWNER/xiaomi-cameras-nas-rtsp/main/market/Apps/XiaomiCamerasNasRtsp/icon.svg
+  title:
+    en_US: Xiaomi Cameras NAS RTSP Bridge
+  tagline:
+    en_US: Replay Xiaomi NAS clips as Blue Iris RTSP cameras
+  description:
+    en_US: Local ZimaOS bridge for Xiaomi NAS recordings. Build xiaomi-cameras-nas-rtsp:local before importing this Compose file.
+  author: Local deployment
+  developer: Local deployment
+  category: Home
+  architectures:
+    - amd64
+    - arm64
+  version: "0.1.0"
+  release_notes:
+    en_US: Local-image import workflow.

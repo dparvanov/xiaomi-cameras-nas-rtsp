@@ -1,0 +1,48 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    restart: unless-stopped
+    ports:
+      # TCP only. The container RTSP port remains 8554; RTSP_PORT is the host port.
+      - "${RTSP_BIND_ADDRESS:-0.0.0.0}:${RTSP_PORT:-8554}:8554/tcp"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    environment:
+      # These values override only the passwords in mediamtx.yml.
+      MTX_AUTHINTERNALUSERS_0_PASS: ${RTSP_PUBLISH_PASSWORD:?Set RTSP_PUBLISH_PASSWORD in .env}
+    command: ["/mediamtx", "/mediamtx.yml"]
+    security_opt:
+      - no-new-privileges:true
+
+  bridge:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      mediamtx:
+        condition: service_started
+    environment:
+      RTSP_PUBLISH_PASSWORD: ${RTSP_PUBLISH_PASSWORD:?Set RTSP_PUBLISH_PASSWORD in .env}
+      SETUP_ADMIN_USERNAME: ${SETUP_ADMIN_USERNAME:?Set SETUP_ADMIN_USERNAME in .env}
+      SETUP_ADMIN_PASSWORD: ${SETUP_ADMIN_PASSWORD:?Set SETUP_ADMIN_PASSWORD in .env}
+      SETUP_SESSION_SECRET: ${SETUP_SESSION_SECRET:?Set SETUP_SESSION_SECRET in .env}
+      SETUP_COOKIE_SECURE: ${SETUP_COOKIE_SECURE:-false}
+    volumes:
+      - ./config/config.json:/config/config.json:ro
+      - ./data:/data
+      - ./logs:/logs
+      # This must be the ZimaOS host path backing the Cameras SMB share, not smb://.
+      - ${XIAOMI_RECORDINGS_PATH:-/DATA/Cameras/xiaomi_camera_videos}:/recordings:ro
+    ports:
+      # The web server listens on container port 8080; SETUP_UI_PORT is the host port.
+      - "${SETUP_BIND_ADDRESS:-0.0.0.0}:${SETUP_UI_PORT:-17883}:8080/tcp"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s

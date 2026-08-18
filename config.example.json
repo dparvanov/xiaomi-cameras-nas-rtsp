@@ -1,0 +1,25 @@
+{
+  "publisher": {
+    "host": "mediamtx",
+    "rtsp_port": 8554,
+    "api_port": 9997,
+    "username": "bridge",
+    "password_env": "RTSP_PUBLISH_PASSWORD",
+    "ffmpeg_path": "/usr/bin/ffmpeg"
+  },
+  "recordings_root": "/recordings",
+  "state_db": "/data/state.sqlite3",
+  "health_file": "/data/health.json",
+  "log_file": "/logs/bridge.log",
+  "status_interval_seconds": 60,
+  "defaults": {
+    "extensions": [".mp4"],
+    "ordering": "path",
+    "file_settle_seconds": 90,
+    "poll_interval_seconds": 10,
+    "retry_limit": 3,
+    "transcode": true,
+    "video_preset": "veryfast"
+  },
+  "cameras": []
+}

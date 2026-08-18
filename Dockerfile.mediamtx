@@ -1,0 +1,6 @@
+FROM bluenviron/mediamtx:1
+
+# A derived image makes Custom App import self-contained: no host config bind.
+COPY mediamtx.yml /mediamtx.yml
+ENTRYPOINT ["/mediamtx"]
+CMD ["/mediamtx.yml"]
