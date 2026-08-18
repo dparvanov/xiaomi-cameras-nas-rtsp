@@ -21,6 +21,7 @@ services:
       mediamtx:
         condition: service_started
     environment:
+      APP_VERSION: ${APP_VERSION:-development}
       RTSP_PUBLISH_PASSWORD: ${RTSP_PUBLISH_PASSWORD:?Set RTSP_PUBLISH_PASSWORD in .env}
       SETUP_COOKIE_SECURE: ${SETUP_COOKIE_SECURE:-false}
     volumes:

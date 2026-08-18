@@ -5,6 +5,7 @@ name: xiaomi-cameras-nas-rtsp
 services:
   mediamtx:
     image: ghcr.io/REPLACE_WITH_GHCR_OWNER/xiaomi-cameras-nas-rtsp-mediamtx:REPLACE_WITH_RELEASE_VERSION
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "0.0.0.0:8554:8554/tcp"
@@ -15,11 +16,13 @@ services:
 
   bridge:
     image: ghcr.io/REPLACE_WITH_GHCR_OWNER/xiaomi-cameras-nas-rtsp:REPLACE_WITH_RELEASE_VERSION
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       mediamtx:
         condition: service_started
     environment:
+      APP_VERSION: REPLACE_WITH_RELEASE_VERSION
       BRIDGE_CONFIG: /app/config.default.json
       RTSP_PUBLISH_PASSWORD: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
       SETUP_COOKIE_SECURE: "false"

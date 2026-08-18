@@ -113,6 +113,8 @@ class ConfigurationTests(BaseCase):
         self.assertIn("main: bridge", compose)
         self.assertIn("/DATA/AppData/xiaomi-cameras-nas-rtsp/data:/data", compose)
         self.assertIn("/DATA/Cameras/xiaomi_camera_videos:/recordings:ro", compose)
+        self.assertEqual(compose.count("pull_policy: always"), 2)
+        self.assertIn('APP_VERSION: "__RELEASE_VERSION__"', compose)
         self.assertNotIn("SETUP_ADMIN_USERNAME", compose)
         self.assertNotIn("SETUP_ADMIN_PASSWORD", compose)
         self.assertNotIn("SETUP_SESSION_SECRET", compose)
@@ -300,9 +302,10 @@ class FakeRuntime:
 class WebUiTests(BaseCase):
     def setUp(self):
         super().setUp()
-        self.old_environment = {name: os.environ.get(name) for name in ("SETUP_ADMIN_USERNAME", "SETUP_ADMIN_PASSWORD", "SETUP_SESSION_SECRET")}
+        self.old_environment = {name: os.environ.get(name) for name in ("APP_VERSION", "SETUP_ADMIN_USERNAME", "SETUP_ADMIN_PASSWORD", "SETUP_SESSION_SECRET")}
         for name in self.old_environment:
             os.environ.pop(name, None)
+        os.environ["APP_VERSION"] = "1.0.3-test"
         self.config_path, _ = self.config()
         (self.base / "recordings" / "front").mkdir(parents=True)
         self.runtime = FakeRuntime()
@@ -333,12 +336,15 @@ class WebUiTests(BaseCase):
         self.assertTrue(self.client.get("/login").location.endswith("/setup"))
         setup_page = self.client.get("/setup").get_data(as_text=True)
         self.assertIn("Create administrator", setup_page)
+        self.assertIn("Version 1.0.3-test", setup_page)
         self.assertEqual(self.client.post("/setup", data={}).status_code, 400)
         self.setup_admin()
         self.assertTrue((self.base / "data/session.secret").is_file())
         dashboard = self.client.get("/").get_data(as_text=True)
         self.assertIn("front", dashboard)
         self.assertIn("RTSP players and recorders", dashboard)
+        self.assertIn("v1.0.3-test", dashboard)
+        self.assertEqual(self.client.get("/").headers["X-Xiaomi-Cameras-RTSP-Version"], "1.0.3-test")
         self.assertEqual(self.client.post("/settings", data={}).status_code, 400)
         self.assertEqual(
             self.client.post("/logout", data={"csrf_token": self.csrf("/")}, headers={"Origin": "http://attacker.invalid"}).status_code,

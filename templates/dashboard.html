@@ -5,6 +5,7 @@
 <header class="topbar">
   {% include "_brand.html" %}
   <div class="topbar-actions">
+    <span class="version-chip">v{{ app_version }}</span>
     <span class="user-chip">{{ admin_username }}</span>
     <form method="post" action="{{ url_for('logout') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

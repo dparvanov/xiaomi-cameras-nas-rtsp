@@ -101,6 +101,16 @@ jobs:
           report-json: market/build-report.json
           report-title: Xiaomi Cameras NAS RTSP ZimaOS Market
           install-system-deps: "false"
+      - name: Publish version-specific direct installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          release_dir="market/dist/releases/$version"
+          mkdir -p "$release_dir"
+          cp market/dist/apps/io.github.xiaomi-cameras-nas-rtsp/docker-compose.yml "$release_dir/docker-compose.yml"
+          cp market/dist/apps/io.github.xiaomi-cameras-nas-rtsp/docker-compose.amd64.yml "$release_dir/docker-compose.amd64.yml"
+          cp market/dist/apps/io.github.xiaomi-cameras-nas-rtsp/docker-compose.arm64.yml "$release_dir/docker-compose.arm64.yml"
       - name: Upload market build diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -117,6 +127,8 @@ jobs:
           test -s market/dist/index.json
           test -s market/dist/apps/io.github.xiaomi-cameras-nas-rtsp/docker-compose.yml
           test -s market/dist/apps/io.github.xiaomi-cameras-nas-rtsp/meta.json
+          version="${GITHUB_REF_NAME#v}"
+          test -s "market/dist/releases/$version/docker-compose.yml"
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:

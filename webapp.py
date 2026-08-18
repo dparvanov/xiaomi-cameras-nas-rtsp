@@ -211,6 +211,7 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
 
     app = Flask(__name__)
     app.config.update(
+        APP_VERSION=os.environ.get("APP_VERSION", "development"),
         SECRET_KEY=session_secret,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -257,6 +258,7 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
     def secure_response(response):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Xiaomi-Cameras-RTSP-Version"] = app.config["APP_VERSION"]
         if request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -346,6 +348,7 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
             scan_error=scan_error,
             runtime=runtime_status,
             admin_username=store.admin_username(),
+            app_version=app.config["APP_VERSION"],
             nas_host=request.host.split(":", 1)[0],
             csrf_token=csrf_token(),
         )

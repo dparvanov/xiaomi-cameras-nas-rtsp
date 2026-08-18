@@ -61,6 +61,17 @@ The direct generated Compose URL is:
 https://dparvanov.github.io/xiaomi-cameras-nas-rtsp/apps/io.github.xiaomi-cameras-nas-rtsp/docker-compose.yml
 ```
 
+Every release also has a cache-resistant direct installer at:
+
+```text
+https://dparvanov.github.io/xiaomi-cameras-nas-rtsp/releases/<version>/docker-compose.yml
+```
+
+Use that version-specific URL with ZimaOS **Install Custom App → External
+link** if a market update starts an older cached container. Published Compose
+files request a fresh image pull, and the running build is shown in the top
+bar and in the `X-Xiaomi-Cameras-RTSP-Version` HTTP response header.
+
 ## Configure cameras
 
 The page scans immediate child directories of `/recordings`. The optional
@@ -139,6 +150,9 @@ should not be edited by hand.
 
 ## Troubleshooting
 
+- **The old interface appears after an update:** uninstall the app without
+  deleting AppData, then install the version-specific external Compose URL.
+  The dashboard version badge and HTTP response header must match the release.
 - **No folders:** confirm the host path exists, then run
   `docker compose exec bridge ls -la /recordings` for a developer deployment.
 - **An RTSP client cannot connect:** check the host port/firewall, client

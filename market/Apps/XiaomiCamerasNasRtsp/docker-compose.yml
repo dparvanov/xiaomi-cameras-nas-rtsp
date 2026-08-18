@@ -3,6 +3,7 @@ name: xiaomi-cameras-nas-rtsp
 services:
   mediamtx:
     image: ghcr.io/__GHCR_NAMESPACE__/xiaomi-cameras-nas-rtsp-mediamtx:__RELEASE_VERSION__
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "0.0.0.0:8554:8554/tcp"
@@ -13,11 +14,13 @@ services:
 
   bridge:
     image: ghcr.io/__GHCR_NAMESPACE__/xiaomi-cameras-nas-rtsp:__RELEASE_VERSION__
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       mediamtx:
         condition: service_started
     environment:
+      APP_VERSION: "__RELEASE_VERSION__"
       BRIDGE_CONFIG: /app/config.default.json
       RTSP_PUBLISH_PASSWORD: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
       SETUP_COOKIE_SECURE: "false"
@@ -74,7 +77,7 @@ x-casaos:
   version: "__RELEASE_VERSION__"
   update_at: "2026-08-18"
   release_notes:
-    en_US: First-run administrator setup and a redesigned responsive interface.
+    en_US: Cache-resistant updates with forced image pulls and visible build-version diagnostics.
   website: https://github.com/__GITHUB_REPOSITORY__
   repo: https://github.com/__GITHUB_REPOSITORY__
   support: https://github.com/__GITHUB_REPOSITORY__/issues

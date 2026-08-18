@@ -24,6 +24,7 @@ services:
       mediamtx:
         condition: service_started
     environment:
+      APP_VERSION: local
       RTSP_PUBLISH_PASSWORD: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
       SETUP_COOKIE_SECURE: "false"
     volumes:
