@@ -55,6 +55,11 @@ its own persistent session key under `/DATA/AppData/xiaomi-cameras-nas-rtsp/data
 RTSP passwords are never returned by the UI/API and persist only as the hash
 format used by MediaMTX.
 
+State-changing forms require a random per-session CSRF token, use a
+`SameSite=Lax` session cookie, and reject browser requests explicitly marked as
+cross-site. This remains compatible with ZimaOS routing that can rewrite the
+form `Origin` header.
+
 The direct generated Compose URL is:
 
 ```text

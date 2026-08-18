@@ -14,7 +14,6 @@ import time
 import urllib.error
 import urllib.request
 from functools import wraps
-from urllib.parse import urlsplit
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -236,8 +235,7 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
         expected = session.get("csrf_token")
         if not expected or not token or not hmac.compare_digest(token, expected):
             abort(400, "Invalid CSRF token.")
-        origin = request.headers.get("Origin")
-        if origin and urlsplit(origin).netloc != request.host:
+        if request.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
             abort(403, "Cross-site form submission denied.")
 
     def signed_in() -> bool:

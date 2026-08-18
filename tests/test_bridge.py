@@ -347,7 +347,11 @@ class WebUiTests(BaseCase):
         self.assertEqual(self.client.get("/").headers["X-Xiaomi-Cameras-RTSP-Version"], "1.0.3-test")
         self.assertEqual(self.client.post("/settings", data={}).status_code, 400)
         self.assertEqual(
-            self.client.post("/logout", data={"csrf_token": self.csrf("/")}, headers={"Origin": "http://attacker.invalid"}).status_code,
+            self.client.post(
+                "/logout",
+                data={"csrf_token": self.csrf("/")},
+                headers={"Origin": "http://attacker.invalid", "Sec-Fetch-Site": "cross-site"},
+            ).status_code,
             403,
         )
         token = self.csrf("/")
@@ -378,6 +382,21 @@ class WebUiTests(BaseCase):
         login_token = self.csrf("/login")
         response = self.client.post("/login", data={"csrf_token": login_token, "username": "setup-owner", "password": "a-long-unique-password"})
         self.assertEqual(response.status_code, 302)
+
+    def test_csrf_accepts_zimaos_rewritten_origin_with_valid_token(self):
+        token = self.csrf()
+        response = self.client.post(
+            "/setup",
+            data={
+                "csrf_token": token,
+                "username": "diagnostic-only",
+                "password": "a-long-unique-password",
+                "password_confirm": "a-different-long-password",
+            },
+            headers={"Origin": "http://zimaos-proxy.invalid", "Sec-Fetch-Site": "same-origin"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Password confirmation does not match", response.get_data(as_text=True))
 
 
 class WorkerReconciliationTests(BaseCase):

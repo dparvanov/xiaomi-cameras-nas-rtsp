@@ -77,7 +77,7 @@ x-casaos:
   version: "__RELEASE_VERSION__"
   update_at: "2026-08-18"
   release_notes:
-    en_US: Cache-resistant updates with forced image pulls and visible build-version diagnostics.
+    en_US: Fix administrator setup behind ZimaOS routing while retaining token-based CSRF protection.
   website: https://github.com/__GITHUB_REPOSITORY__
   repo: https://github.com/__GITHUB_REPOSITORY__
   support: https://github.com/__GITHUB_REPOSITORY__/issues
