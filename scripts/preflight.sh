@@ -38,9 +38,6 @@ require_port() {
 [ -f "$project_dir/config/config.json" ] || fail "copy config.example.json to config/config.json first"
 
 require_secret RTSP_PUBLISH_PASSWORD
-require_secret SETUP_ADMIN_USERNAME
-require_secret SETUP_ADMIN_PASSWORD
-require_secret SETUP_SESSION_SECRET
 require_port RTSP_PORT
 require_port SETUP_UI_PORT
 

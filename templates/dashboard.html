@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Xiaomi Cameras RTSP{% endblock %}
+{% block body_class %}dashboard-page{% endblock %}
+{% block body %}
+<header class="topbar">
+  {% include "_brand.html" %}
+  <div class="topbar-actions">
+    <span class="user-chip">{{ admin_username }}</span>
+    <form method="post" action="{{ url_for('logout') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="button ghost" type="submit">Sign out</button>
+    </form>
+  </div>
+</header>
+
+<main class="page-shell">
+  <section class="page-heading">
+    <div><span class="eyebrow dark">Stream dashboard</span><h1>Cameras</h1><p>Turn Xiaomi backup folders into continuous, authenticated RTSP streams.</p></div>
+    <a class="button secondary" href="{{ url_for('index') }}">Refresh folders</a>
+  </section>
+
+  {% include "_messages.html" %}
+  {% if scan_error %}<div class="notice error" role="alert">{{ scan_error }}</div>{% endif %}
+  {% if runtime.media_error %}<div class="notice error" role="alert">{{ runtime.media_error }}</div>{% endif %}
+
+  <section class="summary-grid" aria-label="Bridge summary">
+    <article class="summary-card"><span>Folders found</span><strong>{{ cameras|length }}</strong><small>Immediate folders in the selected root</small></article>
+    <article class="summary-card"><span>Streams enabled</span><strong>{{ enabled_count }}</strong><small>Published under <code>/xiaomi/…</code></small></article>
+    <article class="summary-card"><span>Recording mount</span><strong class="path-value">/recordings</strong><small>Read-only inside the app</small></article>
+  </section>
+
+  <form method="post" action="{{ url_for('save_settings') }}" class="settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="panel">
+      <div class="panel-heading"><div><span class="section-number">01</span><h2>Source and access</h2></div><p>Choose the folder root and credentials used by RTSP players and recorders.</p></div>
+      <div class="form-grid">
+        <label class="field span-two">Recordings subdirectory
+          <input name="recordings_subdirectory" value="{{ settings.recordings_subdirectory }}" required>
+          <small>Use <code>.</code> for the mounted Xiaomi backup root. Camera folders are scanned one level below it.</small>
+        </label>
+        <label class="field">RTSP username
+          <input name="reader_username" value="{{ settings.reader.username }}" autocomplete="username" required>
+        </label>
+        <label class="field">New RTSP password
+          <input name="reader_password" type="password" minlength="16" autocomplete="new-password">
+          <small>{% if settings.reader.password_set %}Leave blank to keep the current password.{% else %}Required before enabling a stream; minimum 16 characters.{% endif %}</small>
+        </label>
+        <label class="field">Confirm RTSP password
+          <input name="reader_password_confirm" type="password" minlength="16" autocomplete="new-password">
+        </label>
+      </div>
+      <div class="mount-note"><strong>Host folder</strong><code>/DATA/Cameras/xiaomi_camera_videos</code><span>is mounted read-only as</span><code>/recordings</code></div>
+    </section>
+
+    <section class="camera-section">
+      <div class="panel-heading cameras-heading"><div><span class="section-number">02</span><h2>Camera streams</h2></div><p>Enable the folders you want to publish. Stream IDs become part of the RTSP URL.</p></div>
+      {% if cameras %}
+        <div class="camera-grid">
+        {% for camera in cameras %}
+          <article class="camera-card {% if camera.enabled %}is-enabled{% endif %}">
+            <input type="hidden" name="camera_key" value="{{ camera.key }}">
+            <div class="camera-card-head">
+              <div class="camera-icon" aria-hidden="true"><span></span></div>
+              <div class="camera-title"><h3>{{ camera.name }}</h3><code>/recordings/{{ camera.key }}</code></div>
+              <label class="switch"><input type="checkbox" name="enabled:{{ camera.key }}" {% if camera.enabled %}checked{% endif %}><span></span><em>Enable</em></label>
+            </div>
+            {% if camera.missing %}<div class="inline-warning">Folder unavailable; saved configuration retained.</div>{% endif %}
+            <div class="camera-fields">
+              <label class="field">Display name<input name="name:{{ camera.key }}" value="{{ camera.name }}"></label>
+              <label class="field">Stream ID<input name="camera_id:{{ camera.key }}" value="{{ camera.camera_id }}" required><small><code>rtsp://{{ nas_host }}:8554/xiaomi/{{ camera.camera_id }}</code></small></label>
+              <label class="field">Initial playback<select name="start_policy:{{ camera.key }}"><option value="near_live" {% if camera.start_policy == 'near_live' %}selected{% endif %}>Near live (recommended)</option><option value="backfill" {% if camera.start_policy == 'backfill' %}selected{% endif %}>Replay archive from oldest</option></select><small>Fixed after initialization unless the queue is reset.</small></label>
+            </div>
+            <div class="camera-status">
+              <div><span class="status-dot"></span><strong>{{ camera.status.state }}</strong>{% if camera.status.detail %}<small>{{ camera.status.detail }}</small>{% endif %}</div>
+              <dl><div><dt>Queued</dt><dd>{{ camera.status.queued }}</dd></div><div><dt>Playing</dt><dd>{{ camera.status.playing_file or '—' }}</dd></div><div><dt>Newest</dt><dd>{{ camera.status.newest_file or '—' }}</dd></div><div><dt>Source lag</dt><dd>{{ camera.status.source_lag or '—' }}</dd></div></dl>
+            </div>
+          </article>
+        {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state"><div class="empty-icon">⌁</div><h3>No camera folders found</h3><p>Confirm that the Xiaomi backup contains one folder per camera, then refresh this page.</p></div>
+      {% endif %}
+    </section>
+
+    <div class="save-bar"><p>Changes are applied without rebuilding or reinstalling the app.</p><button class="button primary" type="submit">Save and apply</button></div>
+  </form>
+
+  {% if cameras %}
+  <section class="panel reset-panel">
+    <div class="panel-heading"><div><span class="section-number">03</span><h2>Playback reset</h2></div><p>Skip queued replay work and continue from the newest stable source clip. Files on the NAS are never deleted.</p></div>
+    <div class="reset-list">
+      {% for camera in cameras %}
+      <form method="post" action="{{ url_for('reset_near_live') }}" class="reset-row">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="camera_key" value="{{ camera.key }}">
+        <div><strong>{{ camera.name }}</strong><small>{{ camera.status.queued }} clip(s) currently queued</small></div>
+        <label class="confirm-check"><input type="checkbox" name="confirm" required> Confirm queue skip</label>
+        <button class="button danger-soft" type="submit">Start from newest</button>
+      </form>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

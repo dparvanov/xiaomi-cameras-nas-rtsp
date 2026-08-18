@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Bridge Xiaomi NAS recordings into independent RTSP streams for Blue Iris.
+"""Bridge Xiaomi NAS recordings into independent RTSP streams.
 
 Each configured camera owns its own SQLite-backed replay queue and FFmpeg
 publisher. A shared MediaMTX service exposes those publishers at stable RTSP
-URLs. Blue Iris records the streams as ordinary cameras.
+URLs for compatible viewers and recorders.
 
-Blue Iris records footage at *re-ingest time*. This bridge deliberately does
-not alter source files or system time to imitate historical timestamps.
+Downstream clients assign footage timestamps at *re-ingest time*. This bridge
+does not alter source files or system time to imitate historical timestamps.
 """
 
 from __future__ import annotations
@@ -584,7 +584,7 @@ class CameraWorker:
             "-loglevel",
             "warning",
             "-nostdin",
-            "-re",  # preserve the real duration when Blue Iris records the virtual stream
+            "-re",  # preserve real duration while a client consumes the virtual stream
             "-i",
             str(clip_path),
             "-map",

@@ -8,6 +8,8 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY xiaomi_rtsp_bridge.py settings_store.py webapp.py healthcheck.sh /app/
+COPY templates /app/templates
+COPY static /app/static
 COPY config.example.json /app/config.default.json
 
 # The registry image ships this safe production default. The local Compose route

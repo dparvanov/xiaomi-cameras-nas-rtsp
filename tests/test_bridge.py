@@ -7,8 +7,10 @@ import unittest
 from pathlib import Path
 
 from settings_store import (
+    LEGACY_PLACEHOLDER_USERNAME,
     SettingsError,
     SettingsStore,
+    load_or_create_session_secret,
     sanitize_camera_id,
     unique_camera_id,
     validate_relative_directory,
@@ -95,6 +97,8 @@ class ConfigurationTests(BaseCase):
         dockerfile = (project / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("COPY config.example.json /app/config.default.json", dockerfile)
         self.assertIn("healthcheck.sh", dockerfile)
+        self.assertIn("COPY templates /app/templates", dockerfile)
+        self.assertIn("COPY static /app/static", dockerfile)
         self.assertTrue((project / "Dockerfile.mediamtx").is_file())
         self.assertTrue((project / "healthcheck.sh").is_file())
         self.assertEqual(BridgeConfig.from_json(project / "config.example.json").state_db, Path("/data/state.sqlite3"))
@@ -109,6 +113,9 @@ class ConfigurationTests(BaseCase):
         self.assertIn("main: bridge", compose)
         self.assertIn("/DATA/AppData/xiaomi-cameras-nas-rtsp/data:/data", compose)
         self.assertIn("/DATA/Cameras/xiaomi_camera_videos:/recordings:ro", compose)
+        self.assertNotIn("SETUP_ADMIN_USERNAME", compose)
+        self.assertNotIn("SETUP_ADMIN_PASSWORD", compose)
+        self.assertNotIn("SETUP_SESSION_SECRET", compose)
 
     def test_all_zimaos_variants_use_the_migrated_read_only_recordings_path(self):
         project = Path(__file__).parents[1]
@@ -126,7 +133,7 @@ class ConfigurationTests(BaseCase):
             self.assertIn(":/recordings:ro", contents, relative_path)
             self.assertNotIn(old_mount_root, contents, relative_path)
 
-        for relative_path in (".env.example", "README.md", "SPEC.md", "webapp.py"):
+        for relative_path in (".env.example", "README.md", "SPEC.md", "templates/dashboard.html"):
             contents = (project / relative_path).read_text(encoding="utf-8")
             self.assertIn(migrated_root, contents, relative_path)
             self.assertNotIn(old_mount_root, contents, relative_path)
@@ -194,7 +201,7 @@ class NearLiveQueueTests(BaseCase):
         root = config.recordings_root
         (root / "front").mkdir(parents=True)
         store = SettingsStore(self.base / "data/settings.json", root, "setup-owner", "a-long-unique-password")
-        settings = store.update(".", "blueiris", "a-reader-password-which-is-long", {"front": {"enabled": True, "camera_id": "front", "name": "Front", "start_policy": "near_live"}})
+        settings = store.update(".", "viewer", "a-reader-password-which-is-long", {"front": {"enabled": True, "camera_id": "front", "name": "Front", "start_policy": "near_live"}})
         state = ClipState(config.state_db, "front")
         state.discover([self.clip("003.mp4", 30)], policy="near_live")
         state.close()
@@ -219,7 +226,7 @@ class SettingsTests(BaseCase):
     def test_scan_is_immediate_children_and_preserves_missing_selection(self):
         root, store = self.make_store()
         self.assertEqual([row["key"] for row in store.scan_candidates()[0]], ["front"])
-        settings = store.update(".", "blueiris", "a-reader-password-which-is-long", {"front": {"enabled": True, "camera_id": "front", "name": "Front", "start_policy": "near_live"}})
+        settings = store.update(".", "viewer", "a-reader-password-which-is-long", {"front": {"enabled": True, "camera_id": "front", "name": "Front", "start_policy": "near_live"}})
         self.assertTrue(settings["cameras"]["front"]["enabled"])
         root.rename(self.base / "recordings-offline")
         self.assertEqual(store.scan_candidates()[0], [])
@@ -227,16 +234,48 @@ class SettingsTests(BaseCase):
 
     def test_enabled_camera_requires_reader_password(self):
         _, store = self.make_store()
-        with self.assertRaisesRegex(SettingsError, "reader password"):
-            store.update(".", "blueiris", "", {"front": {"enabled": True, "camera_id": "front", "name": "Front", "start_policy": "near_live"}})
+        with self.assertRaisesRegex(SettingsError, "client password"):
+            store.update(".", "viewer", "", {"front": {"enabled": True, "camera_id": "front", "name": "Front", "start_policy": "near_live"}})
 
     def test_password_is_hashed_and_never_public(self):
         _, store = self.make_store()
-        store.update(".", "blueiris", "a-reader-password-which-is-long", {})
+        store.update(".", "viewer", "a-reader-password-which-is-long", {})
         self.assertTrue(store.public()["reader"]["password_set"])
         encoded = json.dumps(store.internal())
         self.assertNotIn("a-reader-password-which-is-long", encoded)
         self.assertNotIn("password_hash", json.dumps(store.public()))
+
+    def test_first_run_admin_creation_and_legacy_placeholder_migration(self):
+        root = self.base / "recordings"
+        root.mkdir()
+        settings_path = self.base / "data/settings.json"
+        fresh = SettingsStore(settings_path, root)
+        self.assertFalse(fresh.is_admin_configured())
+        self.assertEqual(fresh.public()["reader"]["username"], "viewer")
+        username = fresh.create_admin("nas-owner", "a-unique-admin-password")
+        self.assertEqual(username, "nas-owner")
+        self.assertTrue(fresh.verify_admin("nas-owner", "a-unique-admin-password"))
+        with self.assertRaisesRegex(SettingsError, "already been created"):
+            fresh.create_admin("second-owner", "another-unique-password")
+
+        legacy = fresh.internal()
+        legacy["version"] = 1
+        legacy["admin"]["username"] = LEGACY_PLACEHOLDER_USERNAME
+        legacy["reader"]["username"] = "recorder-client"
+        legacy["reader"]["password_hash"] = ""
+        settings_path.write_text(json.dumps(legacy), encoding="utf-8")
+        migrated = SettingsStore(settings_path, root)
+        self.assertFalse(migrated.is_admin_configured())
+        self.assertEqual(migrated.internal()["version"], 2)
+        self.assertEqual(migrated.public()["reader"]["username"], "viewer")
+
+    def test_session_secret_is_generated_once_and_persisted(self):
+        path = self.base / "data/session.secret"
+        first = load_or_create_session_secret(path)
+        second = load_or_create_session_secret(path)
+        self.assertGreaterEqual(len(first), 32)
+        self.assertEqual(first, second)
+        self.assertNotIn(first, path.with_name("settings.json").read_text(encoding="utf-8") if path.with_name("settings.json").exists() else "")
 
 
 class FakeRuntime:
@@ -262,7 +301,8 @@ class WebUiTests(BaseCase):
     def setUp(self):
         super().setUp()
         self.old_environment = {name: os.environ.get(name) for name in ("SETUP_ADMIN_USERNAME", "SETUP_ADMIN_PASSWORD", "SETUP_SESSION_SECRET")}
-        os.environ.update({"SETUP_ADMIN_USERNAME": "setup-owner", "SETUP_ADMIN_PASSWORD": "a-long-unique-password", "SETUP_SESSION_SECRET": "this-is-a-test-session-secret-with-more-than-32-bytes"})
+        for name in self.old_environment:
+            os.environ.pop(name, None)
         self.config_path, _ = self.config()
         (self.base / "recordings" / "front").mkdir(parents=True)
         self.runtime = FakeRuntime()
@@ -278,20 +318,27 @@ class WebUiTests(BaseCase):
                 os.environ[name] = value
         super().tearDown()
 
-    def csrf(self, path="/login"):
+    def csrf(self, path="/setup"):
         page = self.client.get(path)
-        return re.search(r'name=csrf_token value="([^"]+)"', page.get_data(as_text=True)).group(1)
+        return re.search(r'name="csrf_token" value="([^"]+)"', page.get_data(as_text=True)).group(1)
 
-    def login(self):
-        response = self.client.post("/login", data={"csrf_token": self.csrf(), "username": "setup-owner", "password": "a-long-unique-password"})
+    def setup_admin(self):
+        response = self.client.post("/setup", data={"csrf_token": self.csrf(), "username": "setup-owner", "password": "a-long-unique-password", "password_confirm": "a-long-unique-password"})
         self.assertEqual(response.status_code, 302)
 
-    def test_authentication_csrf_and_settings_apply(self):
-        self.assertEqual(self.client.get("/").status_code, 302)
-        self.assertEqual(self.client.post("/login", data={}).status_code, 400)
-        self.login()
+    def test_first_run_authentication_csrf_and_settings_apply(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith("/setup"))
+        self.assertTrue(self.client.get("/login").location.endswith("/setup"))
+        setup_page = self.client.get("/setup").get_data(as_text=True)
+        self.assertIn("Create administrator", setup_page)
+        self.assertEqual(self.client.post("/setup", data={}).status_code, 400)
+        self.setup_admin()
+        self.assertTrue((self.base / "data/session.secret").is_file())
         dashboard = self.client.get("/").get_data(as_text=True)
         self.assertIn("front", dashboard)
+        self.assertIn("RTSP players and recorders", dashboard)
         self.assertEqual(self.client.post("/settings", data={}).status_code, 400)
         self.assertEqual(
             self.client.post("/logout", data={"csrf_token": self.csrf("/")}, headers={"Origin": "http://attacker.invalid"}).status_code,
@@ -301,7 +348,7 @@ class WebUiTests(BaseCase):
         response = self.client.post("/settings", data={
             "csrf_token": token,
             "recordings_subdirectory": ".",
-            "reader_username": "blueiris",
+            "reader_username": "viewer",
             "reader_password": "a-reader-password-which-is-long",
             "reader_password_confirm": "a-reader-password-which-is-long",
             "camera_key": "front",
@@ -317,6 +364,14 @@ class WebUiTests(BaseCase):
         self.assertNotIn("password_hash", api)
         self.client.post("/reset-near-live", data={"csrf_token": self.csrf("/"), "camera_key": "front", "confirm": "on"})
         self.assertEqual(self.runtime.resets, ["front"])
+
+        logout_token = self.csrf("/")
+        self.assertEqual(self.client.post("/logout", data={"csrf_token": logout_token}).status_code, 302)
+        login_page = self.client.get("/login").get_data(as_text=True)
+        self.assertIn("Welcome back", login_page)
+        login_token = self.csrf("/login")
+        response = self.client.post("/login", data={"csrf_token": login_token, "username": "setup-owner", "password": "a-long-unique-password"})
+        self.assertEqual(response.status_code, 302)
 
 
 class WorkerReconciliationTests(BaseCase):

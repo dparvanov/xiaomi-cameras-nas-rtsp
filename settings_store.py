@@ -18,6 +18,9 @@ from typing import Any
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 CAMERA_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+SETTINGS_VERSION = 2
+MIN_ADMIN_PASSWORD_LENGTH = 16
+LEGACY_PLACEHOLDER_USERNAME = "REPLACE_WITH_A_NONDEFAULT_SETUP_USERNAME"
 
 
 class SettingsError(ValueError):
@@ -80,8 +83,45 @@ def validate_camera_id(camera_id: str) -> str:
 def validate_username(username: str) -> str:
     value = username.strip()
     if not USERNAME_RE.fullmatch(value):
-        raise SettingsError("RTSP username must contain only letters, numbers, periods, hyphens, or underscores.")
+        raise SettingsError("Username must contain only letters, numbers, periods, hyphens, or underscores.")
     return value
+
+
+def _is_placeholder(value: str) -> bool:
+    return value.upper().startswith("REPLACE_WITH_") or value.lower() in {"change-me", "replace-me"}
+
+
+def load_or_create_session_secret(path: Path, configured: str = "") -> str:
+    """Return a stable session secret without requiring first-install environment edits."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    configured = configured.strip()
+    if configured and not _is_placeholder(configured):
+        if len(configured) < 32:
+            raise SettingsError("SETUP_SESSION_SECRET must contain at least 32 characters when supplied.")
+        return configured
+
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        generated = secrets.token_urlsafe(48)
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            existing = path.read_text(encoding="utf-8").strip()
+        else:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(generated + "\n")
+            return generated
+    except OSError as exc:
+        raise SettingsError(f"Cannot read persistent session secret: {exc}") from exc
+
+    if len(existing) < 32:
+        raise SettingsError("The persistent session secret is invalid; it must contain at least 32 characters.")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return existing
 
 
 def validate_relative_directory(root: Path, relative: str) -> tuple[str, Path]:
@@ -102,7 +142,7 @@ def validate_relative_directory(root: Path, relative: str) -> tuple[str, Path]:
 class SettingsStore:
     """JSON state with atomic writes. Plaintext passwords never enter this file."""
 
-    def __init__(self, path: Path, recordings_root: Path, admin_username: str, admin_password: str) -> None:
+    def __init__(self, path: Path, recordings_root: Path, admin_username: str = "", admin_password: str = "") -> None:
         self.path = path
         self.recordings_root = recordings_root.resolve(strict=False)
         self._lock = threading.RLock()
@@ -110,40 +150,65 @@ class SettingsStore:
         with self._lock:
             if self.path.exists():
                 self._settings = self._load()
+                if self._settings["version"] == 1:
+                    self._settings["version"] = SETTINGS_VERSION
+                    admin = self._settings.get("admin")
+                    if isinstance(admin, dict) and admin.get("username") == LEGACY_PLACEHOLDER_USERNAME:
+                        self._settings["admin"] = None
+                    reader = self._settings.get("reader")
+                    if isinstance(reader, dict) and not reader.get("password_hash"):
+                        reader["username"] = "viewer"
+                    self._save()
             else:
-                self._validate_initial_admin(admin_username, admin_password)
+                admin = self._bootstrap_admin(admin_username, admin_password)
                 self._settings = {
-                    "version": 1,
-                    "admin": {"username": admin_username, "password_hash": _hash_admin_password(admin_password)},
+                    "version": SETTINGS_VERSION,
+                    "admin": admin,
                     "recordings_subdirectory": ".",
-                    "reader": {"username": "blueiris", "password_hash": ""},
+                    "reader": {"username": "viewer", "password_hash": ""},
                     "cameras": {},
                 }
                 self._save()
 
     @staticmethod
-    def _validate_initial_admin(username: str, password: str) -> None:
-        validate_username(username)
-        if username.lower() in {"admin", "administrator", "change-me"}:
-            raise SettingsError("SETUP_ADMIN_USERNAME must not use a default administrative name.")
-        if len(password) < 16 or password.lower() in {"change-me", "password", "admin"}:
-            raise SettingsError("SETUP_ADMIN_PASSWORD must be a unique password of at least 16 characters.")
+    def _validate_admin(username: str, password: str) -> tuple[str, str]:
+        username = validate_username(username)
+        if len(password) < MIN_ADMIN_PASSWORD_LENGTH or _is_placeholder(password):
+            raise SettingsError(f"Admin password must contain at least {MIN_ADMIN_PASSWORD_LENGTH} characters.")
+        return username, password
+
+    @classmethod
+    def _bootstrap_admin(cls, username: str, password: str) -> dict[str, str] | None:
+        username = username.strip()
+        if not username and not password:
+            return None
+        if _is_placeholder(username) or _is_placeholder(password):
+            return None
+        if not username or not password:
+            raise SettingsError("Supply both SETUP_ADMIN_USERNAME and SETUP_ADMIN_PASSWORD, or leave both unset for first-run setup.")
+        username, password = cls._validate_admin(username, password)
+        return {"username": username, "password_hash": _hash_admin_password(password)}
 
     def _load(self) -> dict[str, Any]:
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise SettingsError(f"Cannot read persistent settings: {exc}") from exc
-        if not isinstance(value, dict) or value.get("version") != 1:
+        if not isinstance(value, dict) or value.get("version") not in {1, SETTINGS_VERSION}:
             raise SettingsError("Persistent settings have an unsupported format.")
         for key in ("admin", "reader", "cameras", "recordings_subdirectory"):
             if key not in value:
                 raise SettingsError("Persistent settings are incomplete.")
+        if value["admin"] is not None and not isinstance(value["admin"], dict):
+            raise SettingsError("Persistent admin settings are invalid.")
+        if not isinstance(value["reader"], dict) or not isinstance(value["cameras"], dict):
+            raise SettingsError("Persistent stream settings are invalid.")
         return value
 
     def _save(self) -> None:
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(self._settings, indent=2, sort_keys=True), encoding="utf-8")
+        temporary.chmod(0o600)
         temporary.replace(self.path)
 
     def public(self) -> dict[str, Any]:
@@ -158,9 +223,29 @@ class SettingsStore:
         with self._lock:
             return json.loads(json.dumps(self._settings))
 
+    def is_admin_configured(self) -> bool:
+        with self._lock:
+            return isinstance(self._settings["admin"], dict)
+
+    def admin_username(self) -> str | None:
+        with self._lock:
+            admin = self._settings["admin"]
+            return admin["username"] if isinstance(admin, dict) else None
+
+    def create_admin(self, username: str, password: str) -> str:
+        with self._lock:
+            if self._settings["admin"] is not None:
+                raise SettingsError("The administrator account has already been created.")
+            username, password = self._validate_admin(username, password)
+            self._settings["admin"] = {"username": username, "password_hash": _hash_admin_password(password)}
+            self._save()
+            return username
+
     def verify_admin(self, username: str, password: str) -> bool:
         with self._lock:
             admin = self._settings["admin"]
+            if not isinstance(admin, dict):
+                return False
             return hmac.compare_digest(username, admin["username"]) and verify_admin_password(password, admin["password_hash"])
 
     def selected_directory(self) -> tuple[str, Path]:
@@ -218,7 +303,7 @@ class SettingsStore:
             if len(all_ids) != len(set(all_ids)):
                 raise SettingsError("Each saved camera, including temporarily unavailable folders, must have a unique camera ID.")
             if any(entry.get("enabled") for entry in updated["cameras"].values()) and not updated["reader"]["password_hash"]:
-                raise SettingsError("Set an RTSP reader password before enabling a camera for Blue Iris.")
+                raise SettingsError("Set an RTSP client password before enabling a camera.")
             return json.loads(json.dumps(updated))
 
     def commit(self, settings: dict[str, Any]) -> None:

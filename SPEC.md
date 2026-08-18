@@ -1,71 +1,69 @@
 # Specification: Xiaomi Cameras NAS RTSP Bridge
 
-**Platform:** ZimaOS NAS with Docker Compose. Blue Iris is a separate LAN host.
+**Platform:** ZimaOS NAS with Docker Compose and generic RTSP clients on the LAN.
 
 ## Goal
 
-Expose selected immediate child folders of the ZimaOS host directory
-`/DATA/Cameras/xiaomi_camera_videos` as authenticated virtual RTSP
-streams at `rtsp://<NAS-LAN-IP>:<RTSP_PORT>/xiaomi/<camera-id>`. Blue Iris records
-each stream continuously into its normal BVR history.
+Expose selected immediate child folders of
+`/DATA/Cameras/xiaomi_camera_videos` as authenticated streams at
+`rtsp://<NAS-LAN-IP>:<RTSP_PORT>/xiaomi/<camera-id>`.
 
 ## Architecture
 
 ```text
-ZimaOS host source (read-only) → /recordings in bridge container
-     → independent scanner / SQLite queue / FFmpeg worker per enabled camera
-     → MediaMTX RTSP/TCP (authenticated) → Blue Iris
+ZimaOS recordings (read-only) → /recordings in bridge container
+    → scanner / SQLite queue / FFmpeg worker per enabled camera
+    → authenticated MediaMTX RTSP/TCP → RTSP viewers and recorders
 ```
 
-The bridge UI is published on configurable host `SETUP_UI_PORT` (default 17883)
-while retaining container port 8080. It is authenticated and can select only the
-mounted recordings root or a descendant. It scans only direct child folders,
-preserves saved cameras through temporary scan failures, and permits safe unique
-ID edits.
-Host bind mounts remain deployment settings (`.env` / ZimaOS app setting), not
-an ability granted to the web container.
+The UI uses configurable host port `17883` and container port `8080`. First
+launch creates an administrator account in the browser; no default credentials
+exist. A random session key is generated and persisted in AppData. The UI can
+select only the recordings mount or a descendant, scans only direct children,
+preserves temporarily unavailable cameras, and supports safe unique stream IDs.
+Host bind mounts remain deployment settings rather than a capability granted to
+the web container.
 
 ## Replay policies
 
-- **Near live (default):** first stable scan selects the newest clip by the
-  configured ordering, persists it as high-water, marks older records skipped,
-  and only queues clips at or after the high-water thereafter. Late older
-  archive uploads are skipped. The policy/high-water are durable over restart.
-- **Backfill archive:** queues existing clips oldest-first. At real-time replay,
+- **Near live (default):** the first stable scan selects the newest clip,
+  persists it as high-water, marks older records skipped, and queues only clips
+  at or after that point. Late older uploads remain skipped across restarts.
+- **Backfill archive:** existing clips queue oldest-first. At real-time replay,
   a source archive that continues growing can remain perpetually behind.
-- An initialized camera policy cannot be silently changed. A confirmed,
-  CSRF-protected reset clears pending bridge work (not NAS files), selects Near
-  live, and establishes a new high-water on the next stable scan.
+- An initialized policy cannot change silently. A confirmed CSRF-protected
+  reset clears pending bridge work—not NAS files—and reinitializes Near live.
 
-Per-camera status includes worker state, queue size, playing file, newest
-discovered file, high-water, and approximate filesystem-mtime source lag.
+Per-camera status includes worker state, queue size, playing file, newest file,
+high-water, and approximate filesystem-mtime source lag.
 
 ## Constraints and security
 
-- Source mount is read-only; source recordings are never altered/deleted.
-- SQLite state, logs, health, and setup settings persist in mounted volumes.
-- Workers are independently reconciled; one failure does not block another.
-- MediaMTX API is private; configurable host `RTSP_PORT` (default 8554) is
-  LAN-published and authenticated. Nonstandard port choices are not security
-  controls.
-- Reader passwords are redacted from API/logs and persist only as MediaMTX
-  SHA-256 auth material; setup password uses salted scrypt.
-- MediaMTX runtime auth configuration is applied with its supported control API
-  and re-applied after server restart.
+- Source recordings are mounted read-only and never altered or deleted.
+- SQLite state, logs, health, settings, and session material persist in mounted
+  AppData volumes.
+- Workers reconcile independently; one camera failure does not block another.
+- MediaMTX's control API is private. RTSP is LAN-published, authenticated, and
+  restricted to `xiaomi/...` for client accounts.
+- Client secrets are redacted from API/logs and stored only as MediaMTX SHA-256
+  auth material; administrator passwords use salted scrypt.
+- The login uses throttling, session rotation, HttpOnly/SameSite cookies, CSRF
+  tokens, same-origin validation, and no-store response headers.
 
 ## Known limitation
 
-Blue Iris history timestamps are replay/re-ingest times, not Xiaomi capture
-times. Filesystem mtime is an approximate source-delay signal, not guaranteed
-capture time.
+Downstream clients assign timestamps at replay/re-ingest time. The original
+capture timeline is not reconstructed, and filesystem mtime is only an
+approximate source-delay signal.
 
 ## Acceptance checks
 
 1. Multiple enabled folders produce independent RTSP paths and workers.
-2. Near live ignores old late uploads and survives restart without losing its
-   high-water; a newer clip queues normally.
+2. Near live ignores old late uploads and retains high-water across restart.
 3. Backfill is oldest-first; reset intentionally returns a camera to Near live.
-4. UI enforces login, CSRF, safe path boundaries, unique IDs, and secret
-   redaction; configured cameras survive rescan unavailability.
-5. Compose validates, source mount is read-only, and completed files do not
-   replay after restart (except a clip interrupted mid-playback).
+4. A fresh or legacy-placeholder install opens first-run setup; a real legacy
+   administrator remains valid.
+5. UI enforces authentication, CSRF, safe paths, unique IDs, and secret
+   redaction while preserving cameras through scan failures.
+6. Compose validates, the source mount is read-only, and completed clips do not
+   replay after restart except for an interrupted in-progress clip.

@@ -1,5 +1,5 @@
-# Registry-only ZimaOS import. Before import, replace every REPLACE_WITH...
-# value with a published GHCR owner, an immutable release version, or a secret.
+# Registry-only ZimaOS import. Before import, replace the image/version and
+# publisher-secret placeholders. The web administrator is created on first run.
 name: xiaomi-cameras-nas-rtsp
 
 services:
@@ -22,9 +22,6 @@ services:
     environment:
       BRIDGE_CONFIG: /app/config.default.json
       RTSP_PUBLISH_PASSWORD: REPLACE_WITH_A_UNIQUE_LONG_PUBLISHER_PASSWORD
-      SETUP_ADMIN_USERNAME: REPLACE_WITH_A_NONDEFAULT_SETUP_USERNAME
-      SETUP_ADMIN_PASSWORD: REPLACE_WITH_A_UNIQUE_SETUP_PASSWORD_AT_LEAST_16_CHARACTERS
-      SETUP_SESSION_SECRET: REPLACE_WITH_A_RANDOM_SESSION_SECRET_AT_LEAST_32_CHARACTERS
       SETUP_COOKIE_SECURE: "false"
     volumes:
       - /DATA/AppData/xiaomi-cameras-nas-rtsp/data:/data
@@ -54,9 +51,9 @@ x-casaos:
   title:
     en_US: Xiaomi Cameras NAS RTSP Bridge
   tagline:
-    en_US: Replay Xiaomi NAS clips as Blue Iris RTSP cameras
+    en_US: Replay Xiaomi NAS recordings as protected RTSP streams
   description:
-    en_US: Registry-installed bridge for Xiaomi NAS recordings. Replace all image and credential placeholders before installing.
+    en_US: Registry-installed bridge for Xiaomi NAS recordings. Create the administrator in the browser after installation.
   author: Registry deployment
   developer: Registry deployment
   category: Home

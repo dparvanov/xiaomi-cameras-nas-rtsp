@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Xiaomi Cameras RTSP{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block body %}
+<main class="auth-shell">
+  <section class="auth-brand">
+    {% include "_brand.html" %}
+    <div class="auth-copy">
+      <span class="eyebrow">Xiaomi Cameras RTSP</span>
+      <h1>One place for every camera stream.</h1>
+      <p>Manage recording folders, stream access, replay position, and camera status from your NAS.</p>
+    </div>
+    <div class="flow-list" aria-label="Application flow">
+      <span>NAS recordings</span><i>→</i><span>Replay bridge</span><i>→</i><span>RTSP clients</span>
+    </div>
+  </section>
+  <section class="auth-form-panel">
+    <div class="auth-form-wrap">
+      <div class="step-badge">Administrator access</div>
+      <h2>Welcome back</h2>
+      <p class="lead">Sign in to configure your bridge.</p>
+      {% include "_messages.html" %}
+      <form method="post" class="stack-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Username
+          <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+        </label>
+        <label>Password
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button class="button primary wide" type="submit">Sign in</button>
+      </form>
+    </div>
+  </section>
+</main>
+{% endblock %}

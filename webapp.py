@@ -13,14 +13,15 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from functools import wraps
 from urllib.parse import urlsplit
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from flask import Flask, abort, flash, jsonify, redirect, render_template_string, request, session, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 
-from settings_store import SettingsError, SettingsStore, unique_camera_id, validate_relative_directory
+from settings_store import SettingsError, SettingsStore, load_or_create_session_secret, unique_camera_id, validate_relative_directory
 from xiaomi_rtsp_bridge import BridgeConfig, CameraConfig, ClipState, WorkerSupervisor
 
 
@@ -95,7 +96,7 @@ class BridgeRuntime:
     def apply(self, settings: dict[str, Any], persist: bool = True) -> None:
         with self._lock:
             if settings["reader"]["username"] == self.config.publisher.username:
-                raise SettingsError("The Blue Iris reader username must differ from the bridge publisher username.")
+                raise SettingsError("The RTSP client username must differ from the bridge publisher username.")
             cameras = self._camera_configs(settings)
             # Check every saved camera, including one currently disabled, so a
             # rescan or toggle cannot silently rewrite an established policy.
@@ -196,55 +197,14 @@ class BridgeRuntime:
         temporary.replace(self.config.health_file)
 
 
-LOGIN_TEMPLATE = """
-<!doctype html><title>Xiaomi NAS Bridge Login</title>
-<style>body{font:16px system-ui;margin:3rem auto;max-width:28rem}input{box-sizing:border-box;width:100%;padding:.55rem;margin:.25rem 0 1rem}.error{color:#a00}</style>
-<h1>Xiaomi NAS Bridge</h1><p>Sign in to configure this ZimaOS service.</p>
-{% for message in get_flashed_messages() %}<p class=error>{{ message }}</p>{% endfor %}
-<form method=post><input type=hidden name=csrf_token value="{{ csrf_token }}"><label>Username</label><input name=username autocomplete=username required><label>Password</label><input name=password type=password autocomplete=current-password required><button>Sign in</button></form>
-"""
-
-DASHBOARD_TEMPLATE = """
-<!doctype html><title>Xiaomi NAS Bridge Setup</title>
-<style>body{font:15px system-ui;margin:2rem auto;max-width:75rem}input{padding:.35rem;max-width:28rem}table{border-collapse:collapse;width:100%;margin:1rem 0}td,th{padding:.55rem;border-bottom:1px solid #ddd;text-align:left}.warning{color:#9a6500}.error{color:#a00}.muted{color:#555}code{white-space:nowrap}</style>
-<h1>Xiaomi NAS → Blue Iris setup</h1>
-<p class=warning><strong>Docker boundary:</strong> this page cannot change the host bind mount. Set <code>XIAOMI_RECORDINGS_PATH=/DATA/Cameras/xiaomi_camera_videos</code> in <code>.env</code>, then this page may select only <code>/recordings</code> or a subdirectory under it.</p>
-{% for message in get_flashed_messages() %}<p class=error>{{ message }}</p>{% endfor %}
-{% if scan_error %}<p class=error>{{ scan_error }}</p>{% endif %}
-{% if runtime.media_error %}<p class=error>{{ runtime.media_error }}</p>{% endif %}
-<form method=post action="{{ url_for('save_settings') }}"><input type=hidden name=csrf_token value="{{ csrf_token }}">
-<h2>Recording root and Blue Iris RTSP reader</h2>
-<label>Subdirectory under /recordings (use <code>.</code> for the Xiaomi root)</label><br><input name=recordings_subdirectory value="{{ settings.recordings_subdirectory }}" required>
-<p class=muted>Only immediate child directories of this selected directory are offered as camera candidates after saving/rescanning.</p>
-<label>Blue Iris RTSP username</label><br><input name=reader_username value="{{ settings.reader.username }}" required>
-<br><label>New Blue Iris RTSP password {% if settings.reader.password_set %}(leave blank to keep the existing password){% endif %}</label><br><input name=reader_password type=password autocomplete=new-password>
-<br><label>Confirm new password</label><br><input name=reader_password_confirm type=password autocomplete=new-password>
-<h2>Camera folders</h2>
-<table><tr><th>Enable</th><th>Folder</th><th>Camera ID / RTSP path</th><th>Name</th><th>Initial policy</th><th>Status</th></tr>
-{% for camera in cameras %}
-<tr><td><input type=hidden name=camera_key value="{{ camera.key }}"><input type=checkbox name="enabled:{{ camera.key }}" {% if camera.enabled %}checked{% endif %}></td>
-<td><code>/recordings/{{ camera.key }}</code>{% if camera.missing %}<div class=warning>Folder currently unavailable; saved configuration retained.</div>{% endif %}</td>
-<td><input name="camera_id:{{ camera.key }}" value="{{ camera.camera_id }}" required><div class=muted><code>/xiaomi/{{ camera.camera_id }}</code></div></td>
-<td><input name="name:{{ camera.key }}" value="{{ camera.name }}"></td>
-<td><select name="start_policy:{{ camera.key }}"><option value=near_live {% if camera.start_policy == 'near_live' %}selected{% endif %}>Near live (recommended)</option><option value=backfill {% if camera.start_policy == 'backfill' %}selected{% endif %}>Backfill archive</option></select><div class=muted>Policy is fixed after first initialization; use reset below to change it.</div></td>
-<td>{{ camera.status.state }} {% if camera.status.detail %}<span class=muted>{{ camera.status.detail }}</span>{% endif %}<div class=muted>Queued: {{ camera.status.queued }} · playing: {{ camera.status.playing_file or '—' }} · newest: {{ camera.status.newest_file or '—' }} · high-water: {{ camera.status.highwater_file or '—' }} · source lag: {{ camera.status.source_lag or '—' }}</div></td></tr>
-{% endfor %}
-</table><button>Save and apply</button></form>
-<h2>Skip backlog intentionally</h2><p class=warning>“Start from newest now” deletes only pending replay work from the bridge queue. It never deletes NAS files. It changes the selected camera to near-live and establishes a new high-water mark on its next scan.</p>
-{% for camera in cameras %}<form method=post action="{{ url_for('reset_near_live') }}"><input type=hidden name=csrf_token value="{{ csrf_token }}"><input type=hidden name=camera_key value="{{ camera.key }}"><label><input type=checkbox name=confirm required> I understand existing queued footage will be skipped in Blue Iris.</label> <button>Start {{ camera.name }} from newest now</button></form>{% endfor %}
-<form method=post action="{{ url_for('logout') }}"><input type=hidden name=csrf_token value="{{ csrf_token }}"><button>Sign out</button></form>
-"""
-
-
 def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | None = None) -> Flask:
     path = Path(config_path or os.environ.get("BRIDGE_CONFIG", "/config/config.json"))
     config = BridgeConfig.from_json(path)
     admin_username = os.environ.get("SETUP_ADMIN_USERNAME", "")
     admin_password = os.environ.get("SETUP_ADMIN_PASSWORD", "")
-    session_secret = os.environ.get("SETUP_SESSION_SECRET", "")
-    if len(session_secret) < 32 or session_secret.lower() in {"change-me", "replace-me"}:
-        raise SettingsError("SETUP_SESSION_SECRET must be a unique random value of at least 32 characters.")
-    store = SettingsStore(config.state_db.with_name("settings.json"), config.recordings_root, admin_username, admin_password)
+    data_directory = config.state_db.parent
+    session_secret = load_or_create_session_secret(data_directory / "session.secret", os.environ.get("SETUP_SESSION_SECRET", ""))
+    store = SettingsStore(data_directory / "settings.json", config.recordings_root, admin_username, admin_password)
     if runtime is None:
         runtime = BridgeRuntime(config, store)
         runtime.start()
@@ -261,6 +221,7 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
     app.extensions["settings_store"] = store
     app.extensions["bridge_runtime"] = runtime
     login_attempts: dict[str, list[float]] = {}
+    login_attempts_lock = threading.Lock()
 
     def csrf_token() -> str:
         token = session.get("csrf_token")
@@ -279,36 +240,79 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
             abort(403, "Cross-site form submission denied.")
 
     def signed_in() -> bool:
-        return hmac.compare_digest(session.get("setup_user", ""), store.internal()["admin"]["username"])
+        username = store.admin_username()
+        return bool(username) and hmac.compare_digest(session.get("setup_user", ""), username)
 
     def login_required(view):
+        @wraps(view)
         def wrapped(*args, **kwargs):
+            if not store.is_admin_configured():
+                return redirect(url_for("setup"))
             if not signed_in():
                 return redirect(url_for("login"))
             return view(*args, **kwargs)
-        wrapped.__name__ = view.__name__
         return wrapped
+
+    @app.after_request
+    def secure_response(response):
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if request.endpoint != "static":
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/setup", methods=["GET", "POST"])
+    def setup():
+        if store.is_admin_configured():
+            return redirect(url_for("index" if signed_in() else "login"))
+        username = request.form.get("username", "") if request.method == "POST" else ""
+        if request.method == "POST":
+            require_csrf()
+            password = request.form.get("password", "")
+            if password != request.form.get("password_confirm", ""):
+                flash("Password confirmation does not match.", "error")
+            else:
+                try:
+                    username = store.create_admin(username, password)
+                except SettingsError as exc:
+                    flash(str(exc), "error")
+                else:
+                    session.clear()
+                    session["setup_user"] = username
+                    session.permanent = True
+                    csrf_token()
+                    flash("Administrator created. Your bridge is ready to configure.", "success")
+                    return redirect(url_for("index"))
+        return render_template("setup.html", csrf_token=csrf_token(), username=username)
 
     @app.get("/login")
     def login():
-        return render_template_string(LOGIN_TEMPLATE, csrf_token=csrf_token())
+        if not store.is_admin_configured():
+            return redirect(url_for("setup"))
+        if signed_in():
+            return redirect(url_for("index"))
+        return render_template("login.html", csrf_token=csrf_token())
 
     @app.post("/login")
     def login_submit():
         require_csrf()
         source_ip = request.remote_addr or "unknown"
         now = time.monotonic()
-        attempts = [timestamp for timestamp in login_attempts.get(source_ip, []) if now - timestamp < 300]
-        if len(attempts) >= 5:
-            abort(429, "Too many login attempts. Try again later.")
+        with login_attempts_lock:
+            attempts = [timestamp for timestamp in login_attempts.get(source_ip, []) if now - timestamp < 300]
+            if len(attempts) >= 5:
+                abort(429, "Too many login attempts. Try again later.")
         if not store.verify_admin(request.form.get("username", ""), request.form.get("password", "")):
-            attempts.append(now)
-            login_attempts[source_ip] = attempts
-            flash("Invalid username or password.")
+            with login_attempts_lock:
+                attempts.append(now)
+                login_attempts[source_ip] = attempts
+            flash("Invalid username or password.", "error")
             return redirect(url_for("login"))
-        login_attempts.pop(source_ip, None)
+        with login_attempts_lock:
+            login_attempts.pop(source_ip, None)
         session.clear()
-        session["setup_user"] = store.internal()["admin"]["username"]
+        session["setup_user"] = store.admin_username()
+        session.permanent = True
         csrf_token()
         return redirect(url_for("index"))
 
@@ -318,6 +322,7 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
         settings = store.public()
         candidates, scan_error = store.scan_candidates()
         configured = settings["cameras"]
+        runtime_status = runtime.status()
         used_ids = {value["camera_id"] for value in configured.values() if value["camera_id"]}
         camera_rows = []
         candidate_keys = set()
@@ -327,13 +332,23 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
             saved = configured.get(key, {})
             camera_id = saved.get("camera_id") or unique_camera_id(candidate["folder"], used_ids)
             used_ids.add(camera_id)
-            status = runtime.status()["cameras"].get(key, {"state": "disabled" if not saved.get("enabled") else "pending start", "detail": "", "queued": 0, "playing_file": None, "newest_file": None, "highwater_file": None, "source_lag": "—"})
+            status = runtime_status["cameras"].get(key, {"state": "disabled" if not saved.get("enabled") else "pending start", "detail": "", "queued": 0, "playing_file": None, "newest_file": None, "highwater_file": None, "source_lag": "—"})
             camera_rows.append({"key": key, "camera_id": camera_id, "name": saved.get("name") or candidate["folder"], "enabled": bool(saved.get("enabled")), "start_policy": saved.get("start_policy", "near_live"), "missing": False, "status": SimpleNamespace(**status)})
         for key, saved in configured.items():
             if key not in candidate_keys:
-                status = runtime.status()["cameras"].get(key, {"state": "disabled" if not saved.get("enabled") else "NAS unavailable", "detail": "", "queued": 0, "playing_file": None, "newest_file": None, "highwater_file": None, "source_lag": "—"})
+                status = runtime_status["cameras"].get(key, {"state": "disabled" if not saved.get("enabled") else "NAS unavailable", "detail": "", "queued": 0, "playing_file": None, "newest_file": None, "highwater_file": None, "source_lag": "—"})
                 camera_rows.append({"key": key, "camera_id": saved["camera_id"], "name": saved.get("name") or Path(key).name, "enabled": bool(saved.get("enabled")), "start_policy": saved.get("start_policy", "near_live"), "missing": True, "status": SimpleNamespace(**status)})
-        return render_template_string(DASHBOARD_TEMPLATE, settings=settings, cameras=camera_rows, scan_error=scan_error, runtime=runtime.status(), csrf_token=csrf_token())
+        return render_template(
+            "dashboard.html",
+            settings=settings,
+            cameras=camera_rows,
+            enabled_count=sum(1 for camera in camera_rows if camera["enabled"]),
+            scan_error=scan_error,
+            runtime=runtime_status,
+            admin_username=store.admin_username(),
+            nas_host=request.host.split(":", 1)[0],
+            csrf_token=csrf_token(),
+        )
 
     @app.post("/settings")
     @login_required
@@ -341,7 +356,7 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
         require_csrf()
         password = request.form.get("reader_password", "")
         if password != request.form.get("reader_password_confirm", ""):
-            flash("Blue Iris RTSP password confirmation does not match.")
+            flash("RTSP password confirmation does not match.", "error")
             return redirect(url_for("index"))
         allowed = set(store.public()["cameras"])
         candidates, _ = store.scan_candidates()
@@ -365,9 +380,9 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
             )
             runtime.apply(proposed)
         except (SettingsError, RuntimeError, ValueError) as exc:
-            flash(str(exc))
+            flash(str(exc), "error")
             return redirect(url_for("index"))
-        flash("Settings applied. Enabled cameras were reconciled without rebuilding the image.")
+        flash("Settings applied. Enabled streams are now reconciled.", "success")
         return redirect(url_for("index"))
 
     @app.post("/reset-near-live")
@@ -379,9 +394,9 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
         try:
             runtime.reset_near_live(request.form.get("camera_key", ""))
         except (SettingsError, ValueError) as exc:
-            flash(str(exc))
+            flash(str(exc), "error")
         else:
-            flash("Camera queue reset. The next stable newest source clip becomes the near-live starting point.")
+            flash("Camera queue reset. The next stable newest source clip becomes the near-live starting point.", "success")
         return redirect(url_for("index"))
 
     @app.post("/logout")
