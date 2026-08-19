@@ -18,6 +18,8 @@ from settings_store import (
 from webapp import BridgeRuntime, create_app
 from xiaomi_rtsp_bridge import BridgeConfig, CameraConfig, Clip, ClipState, WorkerSupervisor
 
+TEST_CREDENTIAL_SECRET = "unit-test-credential-secret-at-least-32-characters"
+
 
 class CompletedProcess:
     def poll(self):
@@ -202,7 +204,7 @@ class NearLiveQueueTests(BaseCase):
         _, config = self.config()
         root = config.recordings_root
         (root / "front").mkdir(parents=True)
-        store = SettingsStore(self.base / "data/settings.json", root, "setup-owner", "a-long-unique-password")
+        store = SettingsStore(self.base / "data/settings.json", root, TEST_CREDENTIAL_SECRET, "setup-owner", "a-long-unique-password")
         settings = store.update(".", "viewer", "a-reader-password-which-is-long", {"front": {"enabled": True, "camera_id": "front", "name": "Front", "start_policy": "near_live"}})
         state = ClipState(config.state_db, "front")
         state.discover([self.clip("003.mp4", 30)], policy="near_live")
@@ -222,7 +224,7 @@ class SettingsTests(BaseCase):
         root = self.base / "recordings"
         (root / "front").mkdir(parents=True)
         (root / "front" / "nested").mkdir()
-        store = SettingsStore(self.base / "data/settings.json", root, "setup-owner", "a-long-unique-password")
+        store = SettingsStore(self.base / "data/settings.json", root, TEST_CREDENTIAL_SECRET, "setup-owner", "a-long-unique-password")
         return root, store
 
     def test_scan_is_immediate_children_and_preserves_missing_selection(self):
@@ -239,19 +241,40 @@ class SettingsTests(BaseCase):
         with self.assertRaisesRegex(SettingsError, "client password"):
             store.update(".", "viewer", "", {"front": {"enabled": True, "camera_id": "front", "name": "Front", "start_policy": "near_live"}})
 
-    def test_password_is_hashed_and_never_public(self):
+    def test_rtsp_password_is_hashed_encrypted_and_never_public(self):
         _, store = self.make_store()
-        store.update(".", "viewer", "a-reader-password-which-is-long", {})
+        password = "Cam pass:@/123"
+        store.update(".", "viewer", password, {})
         self.assertTrue(store.public()["reader"]["password_set"])
+        self.assertTrue(store.public()["reader"]["password_available"])
+        self.assertEqual(store.reader_credentials(), ("viewer", password))
         encoded = json.dumps(store.internal())
-        self.assertNotIn("a-reader-password-which-is-long", encoded)
+        self.assertNotIn(password, encoded)
         self.assertNotIn("password_hash", json.dumps(store.public()))
+        self.assertNotIn("password_encrypted", json.dumps(store.public()))
+
+        reloaded = SettingsStore(store.path, store.recordings_root, TEST_CREDENTIAL_SECRET)
+        self.assertEqual(reloaded.reader_credentials(), ("viewer", password))
+        wrong_key = SettingsStore(store.path, store.recordings_root, "different-test-secret-at-least-32-characters")
+        self.assertEqual(wrong_key.reader_credentials(), ("viewer", ""))
+
+    def test_twelve_character_password_minimums(self):
+        root = self.base / "recordings"
+        root.mkdir()
+        store = SettingsStore(self.base / "data/settings.json", root, TEST_CREDENTIAL_SECRET)
+        with self.assertRaisesRegex(SettingsError, "at least 12"):
+            store.create_admin("nas-owner", "12345678901")
+        store.create_admin("nas-owner", "123456789012")
+        with self.assertRaisesRegex(SettingsError, "at least 12"):
+            store.update(".", "viewer", "12345678901", {})
+        store.update(".", "viewer", "123456789012", {})
+        self.assertEqual(store.reader_credentials(), ("viewer", "123456789012"))
 
     def test_first_run_admin_creation_and_legacy_placeholder_migration(self):
         root = self.base / "recordings"
         root.mkdir()
         settings_path = self.base / "data/settings.json"
-        fresh = SettingsStore(settings_path, root)
+        fresh = SettingsStore(settings_path, root, TEST_CREDENTIAL_SECRET)
         self.assertFalse(fresh.is_admin_configured())
         self.assertEqual(fresh.public()["reader"]["username"], "viewer")
         username = fresh.create_admin("nas-owner", "a-unique-admin-password")
@@ -266,10 +289,24 @@ class SettingsTests(BaseCase):
         legacy["reader"]["username"] = "recorder-client"
         legacy["reader"]["password_hash"] = ""
         settings_path.write_text(json.dumps(legacy), encoding="utf-8")
-        migrated = SettingsStore(settings_path, root)
+        migrated = SettingsStore(settings_path, root, TEST_CREDENTIAL_SECRET)
         self.assertFalse(migrated.is_admin_configured())
-        self.assertEqual(migrated.internal()["version"], 2)
+        self.assertEqual(migrated.internal()["version"], 3)
         self.assertEqual(migrated.public()["reader"]["username"], "viewer")
+
+    def test_v2_hash_migrates_without_inventing_recoverable_password(self):
+        _, store = self.make_store()
+        store.update(".", "viewer", "a-reader-password-which-is-long", {})
+        legacy = store.internal()
+        legacy["version"] = 2
+        legacy["reader"].pop("password_encrypted")
+        store.path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        migrated = SettingsStore(store.path, store.recordings_root, TEST_CREDENTIAL_SECRET)
+        self.assertEqual(migrated.internal()["version"], 3)
+        self.assertTrue(migrated.public()["reader"]["password_set"])
+        self.assertFalse(migrated.public()["reader"]["password_available"])
+        self.assertEqual(migrated.reader_credentials(), ("viewer", ""))
 
     def test_session_secret_is_generated_once_and_persisted(self):
         path = self.base / "data/session.secret"
@@ -285,12 +322,15 @@ class FakeRuntime:
         self.applied = []
         self.resets = []
         self.stopped = False
+        self.store = None
 
     def status(self):
         return {"media_error": "", "cameras": {}}
 
     def apply(self, settings):
         self.applied.append(settings)
+        if self.store is not None:
+            self.store.commit(settings)
 
     def reset_near_live(self, key):
         self.resets.append(key)
@@ -305,11 +345,12 @@ class WebUiTests(BaseCase):
         self.old_environment = {name: os.environ.get(name) for name in ("APP_VERSION", "SETUP_ADMIN_USERNAME", "SETUP_ADMIN_PASSWORD", "SETUP_SESSION_SECRET")}
         for name in self.old_environment:
             os.environ.pop(name, None)
-        os.environ["APP_VERSION"] = "1.0.3-test"
+        os.environ["APP_VERSION"] = "test-build"
         self.config_path, _ = self.config()
         (self.base / "recordings" / "front").mkdir(parents=True)
         self.runtime = FakeRuntime()
         self.app = create_app(self.config_path, runtime=self.runtime)
+        self.runtime.store = self.app.extensions["settings_store"]
         self.app.testing = True
         self.client = self.app.test_client()
 
@@ -336,15 +377,17 @@ class WebUiTests(BaseCase):
         self.assertTrue(self.client.get("/login").location.endswith("/setup"))
         setup_page = self.client.get("/setup").get_data(as_text=True)
         self.assertIn("Create administrator", setup_page)
-        self.assertIn("Version 1.0.3-test", setup_page)
+        self.assertIn("Version test-build", setup_page)
+        self.assertIn('minlength="12"', setup_page)
         self.assertEqual(self.client.post("/setup", data={}).status_code, 400)
         self.setup_admin()
         self.assertTrue((self.base / "data/session.secret").is_file())
         dashboard = self.client.get("/").get_data(as_text=True)
         self.assertIn("front", dashboard)
         self.assertIn("RTSP players and recorders", dashboard)
-        self.assertIn("v1.0.3-test", dashboard)
-        self.assertEqual(self.client.get("/").headers["X-Xiaomi-Cameras-RTSP-Version"], "1.0.3-test")
+        self.assertNotIn("Full RTSP stream URL", dashboard)
+        self.assertIn("vtest-build", dashboard)
+        self.assertEqual(self.client.get("/").headers["X-Xiaomi-Cameras-RTSP-Version"], "test-build")
         self.assertEqual(self.client.post("/settings", data={}).status_code, 400)
         self.assertEqual(
             self.client.post(
@@ -359,8 +402,8 @@ class WebUiTests(BaseCase):
             "csrf_token": token,
             "recordings_subdirectory": ".",
             "reader_username": "viewer",
-            "reader_password": "a-reader-password-which-is-long",
-            "reader_password_confirm": "a-reader-password-which-is-long",
+            "reader_password": "Cam pass:@/123",
+            "reader_password_confirm": "Cam pass:@/123",
             "camera_key": "front",
             "enabled:front": "on",
             "camera_id:front": "front-door",
@@ -369,8 +412,11 @@ class WebUiTests(BaseCase):
         })
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.runtime.applied[-1]["cameras"]["front"]["camera_id"], "front-door")
+        dashboard = self.client.get("/").get_data(as_text=True)
+        self.assertIn("Full RTSP stream URL", dashboard)
+        self.assertIn("rtsp://viewer:Cam%20pass%3A%40%2F123@localhost:8554/xiaomi/front-door", dashboard)
         api = self.client.get("/api/status").get_data(as_text=True)
-        self.assertNotIn("a-reader-password-which-is-long", api)
+        self.assertNotIn("Cam pass:@/123", api)
         self.assertNotIn("password_hash", api)
         self.client.post("/reset-near-live", data={"csrf_token": self.csrf("/"), "camera_key": "front", "confirm": "on"})
         self.assertEqual(self.runtime.resets, ["front"])

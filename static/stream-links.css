@@ -1,0 +1,62 @@
+.stream-address {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--soft-blue);
+}
+
+.stream-address > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.stream-address small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.stream-copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+}
+
+.stream-url {
+  min-width: 0;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  outline: 0;
+}
+
+.stream-url:focus {
+  border-color: #4a83e8;
+  box-shadow: 0 0 0 4px rgba(38, 114, 255, .12);
+}
+
+.stream-copy-button {
+  min-width: 70px;
+  padding: 9px 13px;
+}
+
+@media (max-width: 600px) {
+  .stream-copy-row {
+    grid-template-columns: 1fr;
+  }
+
+  .stream-copy-button {
+    width: 100%;
+  }
+}

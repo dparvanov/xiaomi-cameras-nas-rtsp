@@ -17,6 +17,7 @@ from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import quote
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 
@@ -203,7 +204,13 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
     admin_password = os.environ.get("SETUP_ADMIN_PASSWORD", "")
     data_directory = config.state_db.parent
     session_secret = load_or_create_session_secret(data_directory / "session.secret", os.environ.get("SETUP_SESSION_SECRET", ""))
-    store = SettingsStore(data_directory / "settings.json", config.recordings_root, admin_username, admin_password)
+    store = SettingsStore(
+        data_directory / "settings.json",
+        config.recordings_root,
+        session_secret,
+        admin_username,
+        admin_password,
+    )
     if runtime is None:
         runtime = BridgeRuntime(config, store)
         runtime.start()
@@ -323,6 +330,16 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
         candidates, scan_error = store.scan_candidates()
         configured = settings["cameras"]
         runtime_status = runtime.status()
+        reader_username, reader_password = store.reader_credentials()
+        encoded_reader_username = quote(reader_username, safe="")
+        encoded_reader_password = quote(reader_password, safe="")
+        nas_host = request.host.split(":", 1)[0]
+
+        def stream_url(camera_id: str, enabled: bool) -> str:
+            if not enabled or not reader_password:
+                return ""
+            return f"rtsp://{encoded_reader_username}:{encoded_reader_password}@{nas_host}:8554/xiaomi/{camera_id}"
+
         used_ids = {value["camera_id"] for value in configured.values() if value["camera_id"]}
         camera_rows = []
         candidate_keys = set()
@@ -333,11 +350,13 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
             camera_id = saved.get("camera_id") or unique_camera_id(candidate["folder"], used_ids)
             used_ids.add(camera_id)
             status = runtime_status["cameras"].get(key, {"state": "disabled" if not saved.get("enabled") else "pending start", "detail": "", "queued": 0, "playing_file": None, "newest_file": None, "highwater_file": None, "source_lag": "—"})
-            camera_rows.append({"key": key, "camera_id": camera_id, "name": saved.get("name") or candidate["folder"], "enabled": bool(saved.get("enabled")), "start_policy": saved.get("start_policy", "near_live"), "missing": False, "status": SimpleNamespace(**status)})
+            enabled = bool(saved.get("enabled"))
+            camera_rows.append({"key": key, "camera_id": camera_id, "name": saved.get("name") or candidate["folder"], "enabled": enabled, "stream_url": stream_url(camera_id, enabled), "start_policy": saved.get("start_policy", "near_live"), "missing": False, "status": SimpleNamespace(**status)})
         for key, saved in configured.items():
             if key not in candidate_keys:
                 status = runtime_status["cameras"].get(key, {"state": "disabled" if not saved.get("enabled") else "NAS unavailable", "detail": "", "queued": 0, "playing_file": None, "newest_file": None, "highwater_file": None, "source_lag": "—"})
-                camera_rows.append({"key": key, "camera_id": saved["camera_id"], "name": saved.get("name") or Path(key).name, "enabled": bool(saved.get("enabled")), "start_policy": saved.get("start_policy", "near_live"), "missing": True, "status": SimpleNamespace(**status)})
+                enabled = bool(saved.get("enabled"))
+                camera_rows.append({"key": key, "camera_id": saved["camera_id"], "name": saved.get("name") or Path(key).name, "enabled": enabled, "stream_url": stream_url(saved["camera_id"], enabled), "start_policy": saved.get("start_policy", "near_live"), "missing": True, "status": SimpleNamespace(**status)})
         return render_template(
             "dashboard.html",
             settings=settings,
@@ -347,7 +366,7 @@ def create_app(config_path: str | Path | None = None, runtime: BridgeRuntime | N
             runtime=runtime_status,
             admin_username=store.admin_username(),
             app_version=app.config["APP_VERSION"],
-            nas_host=request.host.split(":", 1)[0],
+            nas_host=nas_host,
             csrf_token=csrf_token(),
         )
 

@@ -45,10 +45,13 @@ high-water, and approximate filesystem-mtime source lag.
 - Workers reconcile independently; one camera failure does not block another.
 - MediaMTX's control API is private. RTSP is LAN-published, authenticated, and
   restricted to `xiaomi/...` for client accounts.
-- Client secrets are redacted from API/logs and stored only as MediaMTX SHA-256
-  auth material; administrator passwords use salted scrypt.
+- Client secrets are redacted from API/logs. RTSP passwords are stored as both
+  MediaMTX SHA-256 auth material and authenticated ciphertext whose key is
+  derived from the persistent app secret; administrator passwords use salted
+  scrypt. Only the authenticated dashboard decrypts RTSP credentials to build
+  copyable, URL-encoded links for enabled streams.
 - The login uses throttling, session rotation, HttpOnly/SameSite cookies, CSRF
-  tokens, same-origin validation, and no-store response headers.
+  tokens, cross-site fetch rejection, and no-store response headers.
 
 ## Known limitation
 
@@ -64,6 +67,7 @@ approximate source-delay signal.
 4. A fresh or legacy-placeholder install opens first-run setup; a real legacy
    administrator remains valid.
 5. UI enforces authentication, CSRF, safe paths, unique IDs, and secret
-   redaction while preserving cameras through scan failures.
+   redaction while preserving cameras through scan failures; full stream URLs
+   appear only for enabled cameras in the authenticated dashboard.
 6. Compose validates, the source mount is read-only, and completed clips do not
    replay after restart except for an interrupted in-progress clip.

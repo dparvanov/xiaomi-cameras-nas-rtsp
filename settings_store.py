@@ -15,11 +15,16 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 CAMERA_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-SETTINGS_VERSION = 2
-MIN_ADMIN_PASSWORD_LENGTH = 16
+SETTINGS_VERSION = 3
+MIN_ADMIN_PASSWORD_LENGTH = 12
+MIN_RTSP_PASSWORD_LENGTH = 12
 LEGACY_PLACEHOLDER_USERNAME = "REPLACE_WITH_A_NONDEFAULT_SETUP_USERNAME"
 
 
@@ -50,6 +55,18 @@ def mediamtx_sha256(password: str) -> str:
     """Return MediaMTX's documented `sha256:<base64>` internal-auth format."""
     digest = hashlib.sha256(password.encode("utf-8")).digest()
     return "sha256:" + base64.b64encode(digest).decode("ascii")
+
+
+def _credential_cipher(secret: str) -> Fernet:
+    if len(secret) < 32:
+        raise SettingsError("The credential-encryption secret must contain at least 32 characters.")
+    derived = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"xiaomi-cameras-nas-rtsp/reader-password/v1",
+    ).derive(secret.encode("utf-8"))
+    return Fernet(base64.urlsafe_b64encode(derived))
 
 
 def sanitize_camera_id(folder_name: str) -> str:
@@ -140,24 +157,35 @@ def validate_relative_directory(root: Path, relative: str) -> tuple[str, Path]:
 
 
 class SettingsStore:
-    """JSON state with atomic writes. Plaintext passwords never enter this file."""
+    """JSON state with atomic writes and encrypted recoverable RTSP credentials."""
 
-    def __init__(self, path: Path, recordings_root: Path, admin_username: str = "", admin_password: str = "") -> None:
+    def __init__(
+        self,
+        path: Path,
+        recordings_root: Path,
+        credential_secret: str,
+        admin_username: str = "",
+        admin_password: str = "",
+    ) -> None:
         self.path = path
         self.recordings_root = recordings_root.resolve(strict=False)
+        self._cipher = _credential_cipher(credential_secret)
         self._lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             if self.path.exists():
                 self._settings = self._load()
-                if self._settings["version"] == 1:
+                if self._settings["version"] in {1, 2}:
+                    previous_version = self._settings["version"]
                     self._settings["version"] = SETTINGS_VERSION
                     admin = self._settings.get("admin")
-                    if isinstance(admin, dict) and admin.get("username") == LEGACY_PLACEHOLDER_USERNAME:
+                    if previous_version == 1 and isinstance(admin, dict) and admin.get("username") == LEGACY_PLACEHOLDER_USERNAME:
                         self._settings["admin"] = None
                     reader = self._settings.get("reader")
                     if isinstance(reader, dict) and not reader.get("password_hash"):
                         reader["username"] = "viewer"
+                    if isinstance(reader, dict):
+                        reader["password_encrypted"] = ""
                     self._save()
             else:
                 admin = self._bootstrap_admin(admin_username, admin_password)
@@ -165,7 +193,7 @@ class SettingsStore:
                     "version": SETTINGS_VERSION,
                     "admin": admin,
                     "recordings_subdirectory": ".",
-                    "reader": {"username": "viewer", "password_hash": ""},
+                    "reader": {"username": "viewer", "password_hash": "", "password_encrypted": ""},
                     "cameras": {},
                 }
                 self._save()
@@ -194,7 +222,7 @@ class SettingsStore:
             value = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise SettingsError(f"Cannot read persistent settings: {exc}") from exc
-        if not isinstance(value, dict) or value.get("version") not in {1, SETTINGS_VERSION}:
+        if not isinstance(value, dict) or value.get("version") not in {1, 2, SETTINGS_VERSION}:
             raise SettingsError("Persistent settings have an unsupported format.")
         for key in ("admin", "reader", "cameras", "recordings_subdirectory"):
             if key not in value:
@@ -215,7 +243,11 @@ class SettingsStore:
         with self._lock:
             return {
                 "recordings_subdirectory": self._settings["recordings_subdirectory"],
-                "reader": {"username": self._settings["reader"]["username"], "password_set": bool(self._settings["reader"]["password_hash"])},
+                "reader": {
+                    "username": self._settings["reader"]["username"],
+                    "password_set": bool(self._settings["reader"]["password_hash"]),
+                    "password_available": bool(self._settings["reader"].get("password_encrypted")),
+                },
                 "cameras": {key: {"enabled": bool(value.get("enabled")), "camera_id": value.get("camera_id", ""), "name": value.get("name", ""), "start_policy": value.get("start_policy", "near_live")} for key, value in self._settings["cameras"].items()},
             }
 
@@ -247,6 +279,18 @@ class SettingsStore:
             if not isinstance(admin, dict):
                 return False
             return hmac.compare_digest(username, admin["username"]) and verify_admin_password(password, admin["password_hash"])
+
+    def reader_credentials(self) -> tuple[str, str]:
+        with self._lock:
+            reader = self._settings["reader"]
+            encrypted = str(reader.get("password_encrypted", ""))
+            if not encrypted:
+                return reader["username"], ""
+            try:
+                password = self._cipher.decrypt(encrypted.encode("ascii")).decode("utf-8")
+            except (InvalidToken, UnicodeDecodeError, ValueError):
+                return reader["username"], ""
+            return reader["username"], password
 
     def selected_directory(self) -> tuple[str, Path]:
         with self._lock:
@@ -282,9 +326,10 @@ class SettingsStore:
             updated["recordings_subdirectory"] = normalized_root
             updated["reader"]["username"] = reader_username
             if reader_password:
-                if len(reader_password) < 16:
-                    raise SettingsError("RTSP reader password must be at least 16 characters.")
+                if len(reader_password) < MIN_RTSP_PASSWORD_LENGTH:
+                    raise SettingsError(f"RTSP reader password must be at least {MIN_RTSP_PASSWORD_LENGTH} characters.")
                 updated["reader"]["password_hash"] = mediamtx_sha256(reader_password)
+                updated["reader"]["password_encrypted"] = self._cipher.encrypt(reader_password.encode("utf-8")).decode("ascii")
 
             seen_ids: set[str] = set()
             for key, value in camera_updates.items():

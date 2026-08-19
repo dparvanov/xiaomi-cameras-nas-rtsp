@@ -6,6 +6,8 @@
   <meta name="color-scheme" content="light dark">
   <title>{% block title %}Xiaomi Cameras RTSP{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='stream-links.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   {% block body %}{% endblock %}

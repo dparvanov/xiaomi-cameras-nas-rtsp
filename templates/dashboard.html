@@ -44,11 +44,11 @@
           <input name="reader_username" value="{{ settings.reader.username }}" autocomplete="username" required>
         </label>
         <label class="field">New RTSP password
-          <input name="reader_password" type="password" minlength="16" autocomplete="new-password">
-          <small>{% if settings.reader.password_set %}Leave blank to keep the current password.{% else %}Required before enabling a stream; minimum 16 characters.{% endif %}</small>
+          <input name="reader_password" type="password" minlength="12" autocomplete="new-password">
+          <small>{% if settings.reader.password_set %}Leave blank to keep the current password.{% else %}Required before enabling a stream; minimum 12 characters.{% endif %}</small>
         </label>
         <label class="field">Confirm RTSP password
-          <input name="reader_password_confirm" type="password" minlength="16" autocomplete="new-password">
+          <input name="reader_password_confirm" type="password" minlength="12" autocomplete="new-password">
         </label>
       </div>
       <div class="mount-note"><strong>Host folder</strong><code>/DATA/Cameras/xiaomi_camera_videos</code><span>is mounted read-only as</span><code>/recordings</code></div>
@@ -72,6 +72,20 @@
               <label class="field">Stream ID<input name="camera_id:{{ camera.key }}" value="{{ camera.camera_id }}" required><small><code>rtsp://{{ nas_host }}:8554/xiaomi/{{ camera.camera_id }}</code></small></label>
               <label class="field">Initial playback<select name="start_policy:{{ camera.key }}"><option value="near_live" {% if camera.start_policy == 'near_live' %}selected{% endif %}>Near live (recommended)</option><option value="backfill" {% if camera.start_policy == 'backfill' %}selected{% endif %}>Replay archive from oldest</option></select><small>Fixed after initialization unless the queue is reset.</small></label>
             </div>
+            {% if camera.enabled %}
+            <div class="stream-address">
+              <span>Full RTSP stream URL</span>
+              {% if camera.stream_url %}
+              <div class="stream-copy-row">
+                <input class="stream-url" value="{{ camera.stream_url }}" readonly aria-label="Full RTSP URL for {{ camera.name }}">
+                <button class="button secondary stream-copy-button" type="button" data-copy-stream>Copy</button>
+              </div>
+              <small>Includes the RTSP username and URL-encoded password. Keep this link private.</small>
+              {% else %}
+              <small>Enter the RTSP password once and save to generate the complete link.</small>
+              {% endif %}
+            </div>
+            {% endif %}
             <div class="camera-status">
               <div><span class="status-dot"></span><strong>{{ camera.status.state }}</strong>{% if camera.status.detail %}<small>{{ camera.status.detail }}</small>{% endif %}</div>
               <dl><div><dt>Queued</dt><dd>{{ camera.status.queued }}</dd></div><div><dt>Playing</dt><dd>{{ camera.status.playing_file or '—' }}</dd></div><div><dt>Newest</dt><dd>{{ camera.status.newest_file or '—' }}</dd></div><div><dt>Source lag</dt><dd>{{ camera.status.source_lag or '—' }}</dd></div></dl>

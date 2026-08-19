@@ -47,13 +47,17 @@ https://dparvanov.github.io/xiaomi-cameras-nas-rtsp/store.json
 4. On first launch, create the administrator account in the browser. There is
    no default username or password.
 5. Set RTSP client credentials, enable the desired folders, and save.
-6. Add `rtsp://<username>:<password>@<NAS-IP>:8554/xiaomi/<camera-id>` to an
-   RTSP-compatible viewer or recorder, using RTSP over TCP.
+6. Copy each enabled camera's complete credential-bearing URL from the
+   dashboard into an RTSP-compatible viewer or recorder, using RTSP over TCP.
 
-The administrator password is stored as a salted scrypt hash. The app generates
-its own persistent session key under `/DATA/AppData/xiaomi-cameras-nas-rtsp/data`.
-RTSP passwords are never returned by the UI/API and persist only as the hash
-format used by MediaMTX.
+Administrator passwords are stored as salted scrypt hashes. RTSP passwords use
+the MediaMTX hash for authentication and authenticated encryption for the
+copyable dashboard URLs. The encryption key is derived from the app's private
+persistent session secret under
+`/DATA/AppData/xiaomi-cameras-nas-rtsp/data`. Plaintext credentials remain
+excluded from settings files, logs, and the status API. The authenticated
+dashboard is intentionally the only place that reveals complete stream URLs.
+Both administrator and RTSP passwords require at least 12 characters.
 
 State-changing forms require a random per-session CSRF token, use a
 `SameSite=Lax` session cookie, and reject browser requests explicitly marked as
@@ -90,6 +94,12 @@ Each enabled folder has:
 - a unique stream ID, producing `/xiaomi/<camera-id>`;
 - a Near live or Backfill initial policy;
 - independent queue, playback, newest-file, and source-lag status.
+- a copyable full RTSP URL containing URL-encoded client credentials.
+
+After upgrading from a release that stored only the RTSP password hash, enter
+the RTSP password once and save. The existing streams continue authenticating
+before that, but the full URLs cannot be reconstructed until the password is
+entered again.
 
 Unavailable folders retain their saved configuration. Applying settings only
 reconciles workers that changed and does not rebuild the image.
